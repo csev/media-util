@@ -41,6 +41,7 @@ link_one compare-media-root.py
 link_one compare-youtube.py
 link_one compare-lessons.py
 link_one compare-lessons-root.py
+link_one compare-whisper-root.py
 
 echo
 echo "Installed into $BIN_DIR"

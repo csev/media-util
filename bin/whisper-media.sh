@@ -11,9 +11,6 @@
 #   vtt/lesson-02-http/07-Web-04-Mini-Django.vtt
 #   srt/lesson-02-http/07-Web-04-Mini-Django.srt
 #
-# whisper-files.txt contains the sorted media-relative filenames, including
-# their original media extensions.
-#
 # Atomic publish behavior:
 #   New or refreshed transcripts are written into a per-run staging area under
 #   .whisper-tmp and are only renamed into txt/vtt/srt after the entire run
@@ -49,14 +46,12 @@ VTT_DIR=""
 SRT_DIR=""
 TMP_DIR=""
 LOG_FILE=""
-FILES_FILE=""
 RUN_TMP_DIR=""
 STAGE_ROOT=""
 STAGE_TXT_DIR=""
 STAGE_VTT_DIR=""
 STAGE_SRT_DIR=""
 MEDIA_LIST=""
-FILES_TMP=""
 
 usage() {
     cat <<EOF_USAGE
@@ -76,7 +71,7 @@ Options:
 Optional environment:
   COURSE_HINT    Course/context hint for the Whisper prompt
                  (default: "Dr. Chuck, Chuck Severance")
-  WHISPER, MODEL, LOG_FILE, FILES_FILE, QUIET_WHISPER, CLEANUP_PY
+  WHISPER, MODEL, LOG_FILE, QUIET_WHISPER, CLEANUP_PY
 EOF_USAGE
 }
 
@@ -108,10 +103,6 @@ fail() {
 }
 
 cleanup_run() {
-    if [ -n "$FILES_TMP" ] && [ -f "$FILES_TMP" ]; then
-        rm -f "$FILES_TMP"
-    fi
-
     if [ -n "$MEDIA_LIST" ] && [ -f "$MEDIA_LIST" ]; then
         rm -f "$MEDIA_LIST"
     fi
@@ -490,7 +481,6 @@ VTT_DIR="$OUTPUT_ROOT/vtt"
 SRT_DIR="$OUTPUT_ROOT/srt"
 TMP_DIR="$OUTPUT_ROOT/.whisper-tmp"
 LOG_FILE="${LOG_FILE:-$OUTPUT_ROOT/whisper-batch.log}"
-FILES_FILE="${FILES_FILE:-$OUTPUT_ROOT/whisper-files.txt}"
 
 mkdir -p "$TXT_DIR" "$VTT_DIR" "$SRT_DIR" "$TMP_DIR"
 
@@ -531,11 +521,6 @@ MEDIA_LIST="$RUN_TMP_DIR/media-files.$$"
         LC_ALL=C sort
 ) > "$MEDIA_LIST" || fail "Could not build media list"
 
-FILES_TMP="$RUN_TMP_DIR/whisper-files.txt.tmp.$$"
-cat "$MEDIA_LIST" > "$FILES_TMP"
-mv -f "$FILES_TMP" "$FILES_FILE"
-FILES_TMP=""
-
 : > "$LOG_FILE"
 
 log "Batch started: $(date)"
@@ -548,7 +533,6 @@ log "MODEL=$MODEL"
 log "VOCAB_FILES:"
 printf "%s\n" "$VOCAB_FILES" | sed 's/^/  /' | tee -a "$LOG_FILE"
 log "REPLACEMENTS_FILE=${REPLACEMENTS_FILE:-none}"
-log "FILES_FILE=$FILES_FILE"
 log "LOG_FILE=$LOG_FILE"
 log "TXT_DIR=$TXT_DIR"
 log "VTT_DIR=$VTT_DIR"
@@ -606,7 +590,6 @@ log "TOTAL=$TOTAL"
 log "DONE=$DONE_COUNT"
 log "SKIPPED=$SKIP_COUNT"
 log "FAILED=$FAIL_COUNT"
-log "FILES=$FILES_FILE"
 log "LOG=$LOG_FILE"
 log "=================================================="
 
