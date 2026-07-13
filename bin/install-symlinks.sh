@@ -37,6 +37,10 @@ link_one whisper-media.sh
 link_one whisper-one.sh
 link_one bootstrap-media-yaml.py
 link_one dump-youtube-playlist.sh
+link_one compare-media-root.py
+link_one compare-youtube.py
+link_one compare-lessons.py
+link_one compare-lessons-root.py
 
 echo
 echo "Installed into $BIN_DIR"

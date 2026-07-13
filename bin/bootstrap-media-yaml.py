@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Bootstrap and refresh media.yaml from lessons.json, media-files.txt, and media files.
+"""Bootstrap and refresh media.yaml from lessons.json and a media tree.
+
+By default the inventory is scanned from MEDIA_ROOT / --media-root
+(.mov / .mp4 / .m4v). Pass --files only to use an explicit list.
 
 Preserves manually edited description / youtube_id / kaltura_id on rerun via ruamel.yaml.
 """
@@ -55,6 +58,14 @@ def build_yaml() -> YAML:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     media_root_default = os.environ.get("MEDIA_ROOT")
+    youtube_jsonl_default = os.environ.get("YOUTUBE_PLAYLIST_JSONL")
+    if not youtube_jsonl_default:
+        youtube_dir = os.environ.get("YOUTUBE_DIR")
+        if youtube_dir:
+            youtube_jsonl_default = str(Path(youtube_dir) / "youtube-playlist.jsonl")
+        else:
+            youtube_jsonl_default = str(CWD / "youtube" / "youtube-playlist.jsonl")
+
     parser = argparse.ArgumentParser(
         description=(
             "Bootstrap or refresh media.yaml from lessons and media files. "
@@ -70,8 +81,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--files",
         type=Path,
-        default=CWD / "media" / "media-files.txt",
-        help=f"Path to media filename list (default: {CWD / 'media' / 'media-files.txt'})",
+        default=None,
+        help=(
+            "Optional explicit media filename list. "
+            "Default: scan --media-root for .mov/.mp4/.m4v"
+        ),
     )
     parser.add_argument(
         "--media-root",
@@ -106,10 +120,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--youtube-playlist",
         type=Path,
-        default=CWD / "media" / "youtube-playlist.jsonl",
+        default=Path(youtube_jsonl_default),
         help=(
             "yt-dlp JSONL dump of the course playlist "
-            f"(default: {CWD / 'media' / 'youtube-playlist.jsonl'})"
+            f"(default: {youtube_jsonl_default}; "
+            "from YOUTUBE_PLAYLIST_JSONL / YOUTUBE_DIR when set)"
         ),
     )
     parser.add_argument(
@@ -126,14 +141,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def load_lessons_media_map(
     lessons_path: Path,
     relevant: set[str] | None = None,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Return (title_map, youtube_id_map) from lessons.json.
+    *,
+    strict: bool = True,
+) -> tuple[dict[str, str], dict[str, str], dict[str, set[str]], dict[str, set[str]]]:
+    """Return (title_map, youtube_id_map, title_conflicts, youtube_conflicts).
 
     Schema (inspected): top-level ``modules`` list; each module has ``items``.
     Items may include ``media``, ``title``, and ``youtube``.
 
     Identical reuses are allowed. Conflicting titles/youtube IDs for the same
-    media path are an error when that path is in ``relevant``.
+    media path are collected; when ``strict`` is true they raise SystemExit
+    (for paths in ``relevant`` when provided).
     """
     try:
         text = lessons_path.read_text(encoding="utf-8")
@@ -209,7 +227,7 @@ def load_lessons_media_map(
         title_conflicts = {k: v for k, v in title_conflicts.items() if k in relevant}
         youtube_conflicts = {k: v for k, v in youtube_conflicts.items() if k in relevant}
 
-    if title_conflicts:
+    if strict and title_conflicts:
         lines = [
             f"Error: duplicate filename mappings with conflicting titles "
             f"in {lessons_path}:"
@@ -220,7 +238,7 @@ def load_lessons_media_map(
                 lines.append(f"    - {title}")
         raise SystemExit("\n".join(lines))
 
-    if youtube_conflicts:
+    if strict and youtube_conflicts:
         lines = [
             f"Error: duplicate filename mappings with conflicting youtube IDs "
             f"in {lessons_path}:"
@@ -231,7 +249,7 @@ def load_lessons_media_map(
                 lines.append(f"    - {youtube_id}")
         raise SystemExit("\n".join(lines))
 
-    return title_map, youtube_map
+    return title_map, youtube_map, title_conflicts, youtube_conflicts
 
 
 def normalize_title(title: str) -> str:
@@ -424,6 +442,35 @@ def load_media_files(files_path: Path) -> list[str]:
         result.append(name)
     return result
 
+
+MEDIA_SUFFIXES = {".mov", ".mp4", ".m4v"}
+
+
+def scan_media_root(media_root: Path) -> list[str]:
+    """Return sorted relative paths of media files under media_root."""
+    if not media_root.is_dir():
+        raise SystemExit(f"Error: media root is not a directory: {media_root}")
+
+    result: list[str] = []
+    for path in media_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in MEDIA_SUFFIXES:
+            continue
+        result.append(path.relative_to(media_root).as_posix())
+
+    result.sort(key=lambda name: name.encode("utf-8"))
+    if not result:
+        raise SystemExit(
+            f"Error: no .mov/.mp4/.m4v files found under {media_root}"
+        )
+    return result
+
+
+def resolve_media_files(media_root: Path, files_path: Path | None) -> list[str]:
+    if files_path is not None:
+        return load_media_files(files_path)
+    return scan_media_root(media_root)
 
 def title_from_stem(rel_path: str) -> str:
     stem = Path(rel_path).stem
@@ -632,7 +679,7 @@ def rebuild_entries(
     media_files: list[str],
     updated: dict[str, CommentedMap],
 ) -> tuple[CommentedMap, list[str]]:
-    """Return entries in media-files.txt order, then any orphaned keys."""
+    """Return entries in media inventory order, then any orphaned keys."""
     media_set = set(media_files)
     orphans = [key for key in old_entries.keys() if key not in media_set]
 
@@ -654,14 +701,16 @@ def rebuild_entries(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     ffprobe = require_ffprobe()
-    media_files = load_media_files(args.files)
-    title_map, lesson_youtube_map = load_lessons_media_map(
-        args.lessons, relevant=set(media_files)
-    )
     media_root: Path = args.media_root
 
     if not media_root.is_dir():
         raise SystemExit(f"Error: media root is not a directory: {media_root}")
+
+    media_files = resolve_media_files(media_root, args.files)
+    inventory_label = str(args.files) if args.files else str(media_root)
+    title_map, lesson_youtube_map, _, _ = load_lessons_media_map(
+        args.lessons, relevant=set(media_files)
+    )
 
     playlist = load_youtube_playlist(args.youtube_playlist)
     by_id, by_title, by_basename = index_youtube_playlist(playlist)
@@ -767,7 +816,7 @@ def main(argv: list[str] | None = None) -> int:
             for name in youtube_unmatched:
                 print(f"  {name}")
     if orphans:
-        print(f"Orphaned YAML entries ({len(orphans)}) not in {args.files}:")
+        print(f"Orphaned YAML entries ({len(orphans)}) not in {inventory_label}:")
         for name in orphans:
             print(f"  {name}")
     else:
