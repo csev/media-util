@@ -608,6 +608,7 @@ fi
 
 : > "$LOG_FILE"
 
+BATCH_START_EPOCH="$(date +%s)"
 log "Batch started: $(date)"
 log "MEDIA_ROOT=$MEDIA_ROOT"
 log "WHISPER_ROOT=$WHISPER_ROOT"
@@ -663,6 +664,8 @@ done 3< "$MEDIA_LIST"
 log ""
 log "=================================================="
 log "Batch finished: $(date)"
+BATCH_ELAPSED="$(( $(date +%s) - BATCH_START_EPOCH ))"
+log "ELAPSED=$(format_time "$BATCH_ELAPSED") (${BATCH_ELAPSED}s)"
 log "TOTAL=$TOTAL"
 log "DONE=$DONE_COUNT"
 log "SKIPPED=$SKIP_COUNT"
