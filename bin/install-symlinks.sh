@@ -34,6 +34,7 @@ link_one whisper-desc
 link_one whisper-cleanup.py
 link_one whisper-folder.sh
 link_one whisper-media.sh
+link_one whisper-lessons
 link_one whisper-one.sh
 link_one bootstrap-media-yaml.py
 link_one dump-youtube-playlist.sh

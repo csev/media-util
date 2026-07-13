@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate YouTube title, tags, and description from whisper txt/ transcripts.
 
-Run from a whisper folder that contains txt/... (for example a course whisper/).
+Uses $WHISPER_ROOT from media.env when set (the whisper folder containing txt/).
 Writes matching files under desc/... via the local Ollama API.
 
 Output file format:
@@ -263,8 +263,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--root",
-        default=".",
-        help="Whisper folder containing txt/ (default: current directory)",
+        default=os.environ.get("WHISPER_ROOT", "."),
+        help=(
+            "Whisper folder containing txt/ "
+            "(default: $WHISPER_ROOT, else current directory)"
+        ),
     )
     parser.add_argument(
         "--model",

@@ -30,7 +30,7 @@ esac
 
 export COURSE_ROOT=/Users/csev/htdocs/dj4e
 export MEDIA_ROOT=/Users/csev/Desktop/teach/dj4e-media
-export OUTPUT_ROOT=/Users/csev/htdocs/dj4e/whisper
+export WHISPER_ROOT=/Users/csev/htdocs/dj4e/whisper
 export YOUTUBE_DIR=/Users/csev/htdocs/dj4e/youtube
 export YOUTUBE_PLAYLIST='https://www.youtube.com/playlist?list=PLlRFEj9H3Oj5e-EH0t3kXrcdygrL9-u-Z'
 export COURSE_HINT='Django for Everybody, DJ4E, Django, Python, web development, Dr. Chuck, Chuck Severance'
@@ -78,12 +78,20 @@ no longer under `MEDIA_ROOT`.
 
 ### 4. Transcribe new / missing media
 
+All media under `MEDIA_ROOT`:
+
 ```bash
 whisper-media.sh
 ```
 
-Scans `MEDIA_ROOT` and writes transcripts under `$OUTPUT_ROOT` (`txt/`, `vtt/`,
-`srt/`). Existing transcripts are skipped unless you pass `--force`.
+Or only media referenced by `lessons.json`:
+
+```bash
+whisper-lessons
+```
+
+Both write transcripts under `$WHISPER_ROOT` (`txt/`, `vtt/`, `srt/`).
+Existing transcripts are skipped unless you pass `--force`.
 
 ### 5. Generate titles, tags, and descriptions with Ollama
 
@@ -91,10 +99,10 @@ Start Ollama if it is not already running, then:
 
 ```bash
 ollama serve   # if needed
-cd whisper
 whisper-desc
 ```
 
+Uses `$WHISPER_ROOT` from `media.env` (no need to `cd whisper`).
 Writes `desc/...` with the same relative names as `txt/...`:
 
 ```
@@ -156,7 +164,8 @@ Media binaries usually live outside the www tree, for example:
 | `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
 | `compare-lessons-root.py` | Diff `lessons.json` vs `MEDIA_ROOT` |
 | `compare-whisper-root.py` | Diff whisper artifacts vs `MEDIA_ROOT` (`--remove` orphans) |
-| `whisper-media.sh` | Recursively transcribe `MEDIA_ROOT` into whisper/ |
+| `whisper-media.sh` | Recursively transcribe all media under `MEDIA_ROOT` |
+| `whisper-lessons` | Transcribe only media paths listed in `lessons.json` |
 | `whisper-desc` | Generate title/tags/description via Ollama |
 | `bootstrap-media-yaml.py` | Build/refresh `media.yaml` |
 | `whisper-one.sh` | Transcribe a single media file next to itself |
@@ -173,7 +182,7 @@ Media binaries usually live outside the www tree, for example:
 | `MEDIA_UTIL` | `media.env` | Path to this repo; its `bin/` is prepended to `PATH` |
 | `COURSE_ROOT` | `media.env` | Course www root (pwd check) |
 | `MEDIA_ROOT` | whisper / compare / bootstrap | Media binary tree |
-| `OUTPUT_ROOT` | whisper tools | Whisper output tree |
+| `WHISPER_ROOT` | whisper tools / `whisper-desc` | Whisper output tree |
 | `YOUTUBE_DIR` | dump / bootstrap | Course `youtube/` folder |
 | `YOUTUBE_PLAYLIST` | `dump-youtube-playlist.sh` | Course playlist URL |
 | `YOUTUBE_PLAYLIST_JSONL` | dump / bootstrap | Optional override for the JSONL path |

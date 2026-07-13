@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Transcribe every media path referenced in lessons.json.
+# Thin wrapper around whisper-media.sh --from-lessons.
+
+set -euo pipefail
+
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+    TARGET="$(readlink "$SOURCE")"
+    case "$TARGET" in
+        /*) SOURCE="$TARGET" ;;
+        *)  SOURCE="$(dirname "$SOURCE")/$TARGET" ;;
+    esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd -P)"
+
+exec "$SCRIPT_DIR/whisper-media.sh" --from-lessons "$@"

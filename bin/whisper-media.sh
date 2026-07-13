@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Recursively transcribe a media tree into a Git-managed whisper tree.
-# macOS Bash 3.2 friendly. Course-agnostic — set MEDIA_ROOT and OUTPUT_ROOT.
+# macOS Bash 3.2 friendly. Course-agnostic — set MEDIA_ROOT and WHISPER_ROOT.
 #
 # A media file such as:
 #   lesson-02-http/07-Web-04-Mini-Django.m4v
@@ -12,16 +12,17 @@
 #   srt/lesson-02-http/07-Web-04-Mini-Django.srt
 #
 # Atomic publish behavior:
-#   New or refreshed transcripts are written into a per-run staging area under
-#   .whisper-tmp and are only renamed into txt/vtt/srt after the entire run
-#   finishes successfully. If the script is aborted or fails mid-run, existing
-#   checked-in transcripts remain untouched.
+#   Each finished transcript set is written under .whisper-tmp and then moved
+#   into txt/vtt/srt immediately, so an abort mid-batch keeps completed work.
+#   A failure on one file does not discard transcripts already published.
 
 set -u
 
 FORCE=0
 QUIET_WHISPER="${QUIET_WHISPER:-1}"
 SUCCESS=0
+FROM_LESSONS=0
+LESSONS_JSON="${LESSONS_JSON:-}"
 
 # Resolve through symlinks so ~/bin wrappers find sibling tools in this repo.
 SOURCE="$0"
@@ -35,7 +36,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd -P)"
 
 MEDIA_ROOT="${MEDIA_ROOT:-}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-}"
+WHISPER_ROOT="${WHISPER_ROOT:-}"
 WHISPER="${WHISPER:-whisper-cli}"
 MODEL="${MODEL:-$HOME/models/ggml-medium.bin}"
 CLEANUP_PY="${CLEANUP_PY:-$SCRIPT_DIR/whisper-cleanup.py}"
@@ -55,23 +56,27 @@ MEDIA_LIST=""
 
 usage() {
     cat <<EOF_USAGE
-Usage: $(basename "$0") [--force|-f] [--verbose|-v]
+Usage: $(basename "$0") [--force|-f] [--verbose|-v] [--from-lessons] [--lessons PATH]
 
-Recursively scans MEDIA_ROOT and writes transcripts under OUTPUT_ROOT.
+Scans MEDIA_ROOT (default) or media paths from lessons.json (--from-lessons)
+and writes transcripts under WHISPER_ROOT.
 
 Required environment:
   MEDIA_ROOT     Directory tree of .mov/.mp4/.m4v files
-  OUTPUT_ROOT    Whisper folder (receives txt/, vtt/, srt/)
+  WHISPER_ROOT   Whisper folder (receives txt/, vtt/, srt/)
 
 Options:
-  --force, -f    Re-run Whisper even if a transcript already exists.
-  --verbose, -v  Keep whisper-cli transcript output in the log.
-  --help, -h     Show this help.
+  --force, -f       Re-run Whisper even if a transcript already exists.
+  --verbose, -v     Keep whisper-cli transcript output in the log.
+  --from-lessons    Transcribe only media paths listed in lessons.json
+  --lessons PATH    lessons.json path (implies --from-lessons)
+                    (default: \$LESSONS_JSON or \$COURSE_ROOT/lessons.json)
+  --help, -h        Show this help.
 
 Optional environment:
   COURSE_HINT    Course/context hint for the Whisper prompt
                  (default: "Dr. Chuck, Chuck Severance")
-  WHISPER, MODEL, LOG_FILE, QUIET_WHISPER, CLEANUP_PY
+  WHISPER, MODEL, LOG_FILE, QUIET_WHISPER, CLEANUP_PY, LESSONS_JSON
 EOF_USAGE
 }
 
@@ -84,6 +89,20 @@ while [ "$#" -gt 0 ]; do
         --verbose|-v)
             QUIET_WHISPER=0
             shift
+            ;;
+        --from-lessons)
+            FROM_LESSONS=1
+            shift
+            ;;
+        --lessons)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --lessons requires a path" >&2
+                usage >&2
+                exit 1
+            fi
+            LESSONS_JSON="$2"
+            FROM_LESSONS=1
+            shift 2
             ;;
         --help|-h)
             usage
@@ -153,7 +172,7 @@ find_upward_file_from() {
 find_config_file() {
     target="$1"
 
-    if find_upward_file_from "$target" "$OUTPUT_ROOT"; then
+    if find_upward_file_from "$target" "$WHISPER_ROOT"; then
         return 0
     fi
 
@@ -190,7 +209,7 @@ find_vocab_files() {
     # then the media tree, then the home directory. At the first directory
     # containing matches, use every file whose name contains
     # "whisper-vocabulary", sorted by filename.
-    if find_matching_files_upward_from "*whisper-vocabulary*" "$OUTPUT_ROOT"; then
+    if find_matching_files_upward_from "*whisper-vocabulary*" "$WHISPER_ROOT"; then
         return 0
     fi
 
@@ -437,50 +456,37 @@ process_file() {
     total_end=$(date +%s)
     total_time=$((total_end - total_start))
 
-    if [ -f "$STAGE_TXT_FILE" ] && [ -f "$STAGE_VTT_FILE" ] && [ -f "$STAGE_SRT_FILE" ]; then
-        log "STAGED: $relative_media"
-        log "TIMING:"
-        log "  FFMPEG : $(format_time "$ffmpeg_time")"
-        log "  WHISPER: $(format_time "$whisper_time")"
-        log "  TOTAL  : $(format_time "$total_time")"
-        return 0
+    if [ ! -f "$STAGE_TXT_FILE" ] || [ ! -f "$STAGE_VTT_FILE" ] || [ ! -f "$STAGE_SRT_FILE" ]; then
+        log "WARNING: staging finished but one or more staged transcript files were not found for $relative_media"
+        return 1
     fi
 
-    log "WARNING: staging finished but one or more staged transcript files were not found for $relative_media"
-    return 1
-}
+    mkdir -p "$(dirname "$TXT_FILE")" "$(dirname "$VTT_FILE")" "$(dirname "$SRT_FILE")"
+    mv -f "$STAGE_TXT_FILE" "$TXT_FILE"
+    mv -f "$STAGE_VTT_FILE" "$VTT_FILE"
+    mv -f "$STAGE_SRT_FILE" "$SRT_FILE"
 
-publish_staged_files() {
-    staged_list="$RUN_TMP_DIR/staged-files.$$"
-
-    find "$STAGE_ROOT" -type f | LC_ALL=C sort > "$staged_list"
-
-    while IFS= read -r staged_file
-    do
-        [ -n "$staged_file" ] || continue
-        rel_path="${staged_file#$STAGE_ROOT/}"
-        final_file="$OUTPUT_ROOT/$rel_path"
-        mkdir -p "$(dirname "$final_file")"
-        mv -f "$staged_file" "$final_file"
-    done < "$staged_list"
-
-    rm -f "$staged_list"
+    log "DONE: $relative_media"
+    log "TIMING:"
+    log "  FFMPEG : $(format_time "$ffmpeg_time")"
+    log "  WHISPER: $(format_time "$whisper_time")"
+    log "  TOTAL  : $(format_time "$total_time")"
     return 0
 }
 
 [ -n "$MEDIA_ROOT" ] || fail "MEDIA_ROOT is required (directory of .mov/.mp4/.m4v files)"
-[ -n "$OUTPUT_ROOT" ] || fail "OUTPUT_ROOT is required (whisper folder for txt/vtt/srt)"
+[ -n "$WHISPER_ROOT" ] || fail "WHISPER_ROOT is required (whisper folder for txt/vtt/srt)"
 [ -d "$MEDIA_ROOT" ] || fail "Media root not found: $MEDIA_ROOT"
 
 MEDIA_ROOT="$(cd "$MEDIA_ROOT" && pwd -P)"
-mkdir -p "$OUTPUT_ROOT"
-OUTPUT_ROOT="$(cd "$OUTPUT_ROOT" && pwd -P)"
+mkdir -p "$WHISPER_ROOT"
+WHISPER_ROOT="$(cd "$WHISPER_ROOT" && pwd -P)"
 
-TXT_DIR="$OUTPUT_ROOT/txt"
-VTT_DIR="$OUTPUT_ROOT/vtt"
-SRT_DIR="$OUTPUT_ROOT/srt"
-TMP_DIR="$OUTPUT_ROOT/.whisper-tmp"
-LOG_FILE="${LOG_FILE:-$OUTPUT_ROOT/whisper-batch.log}"
+TXT_DIR="$WHISPER_ROOT/txt"
+VTT_DIR="$WHISPER_ROOT/vtt"
+SRT_DIR="$WHISPER_ROOT/srt"
+TMP_DIR="$WHISPER_ROOT/.whisper-tmp"
+LOG_FILE="${LOG_FILE:-$WHISPER_ROOT/whisper-batch.log}"
 
 mkdir -p "$TXT_DIR" "$VTT_DIR" "$SRT_DIR" "$TMP_DIR"
 
@@ -504,7 +510,7 @@ if [ ! -f "$MODEL" ]; then
 fi
 
 VOCAB_FILES="$(find_vocab_files)" || \
-    fail "No vocabulary files containing 'whisper-vocabulary' were found while walking upward from $OUTPUT_ROOT or $MEDIA_ROOT"
+    fail "No vocabulary files containing 'whisper-vocabulary' were found while walking upward from $WHISPER_ROOT or $MEDIA_ROOT"
 REPLACEMENTS_FILE="$(find_config_file "whisper-replacements.txt" || true)"
 VOCAB_PROMPT="$(build_prompt)"
 
@@ -514,20 +520,74 @@ if "$WHISPER" --help 2>&1 | grep -q -- "--prompt"; then
 fi
 
 MEDIA_LIST="$RUN_TMP_DIR/media-files.$$"
-(
-    cd "$MEDIA_ROOT" || exit 1
-    find . -type f \( -iname "*.mov" -o -iname "*.mp4" -o -iname "*.m4v" \) -print |
-        sed 's#^\./##' |
-        LC_ALL=C sort
-) > "$MEDIA_LIST" || fail "Could not build media list"
+if [ "$FROM_LESSONS" -eq 1 ]; then
+    if [ -z "$LESSONS_JSON" ]; then
+        if [ -n "${COURSE_ROOT:-}" ] && [ -f "$COURSE_ROOT/lessons.json" ]; then
+            LESSONS_JSON="$COURSE_ROOT/lessons.json"
+        else
+            LESSONS_JSON="$(pwd -P)/lessons.json"
+        fi
+    fi
+    [ -f "$LESSONS_JSON" ] || fail "lessons.json not found: $LESSONS_JSON"
+
+    python3 - "$LESSONS_JSON" "$MEDIA_LIST" <<'PY' || fail "Could not read media paths from lessons.json"
+import json
+import sys
+from pathlib import Path
+
+lessons_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+data = json.loads(lessons_path.read_text(encoding="utf-8"))
+modules = data.get("modules")
+if not isinstance(modules, list):
+    raise SystemExit("lessons.json: expected top-level modules list")
+
+seen = set()
+paths = []
+for module in modules:
+    if not isinstance(module, dict):
+        continue
+    items = module.get("items") or []
+    if not isinstance(items, list):
+        continue
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        media = item.get("media")
+        if not isinstance(media, str) or not media.strip():
+            continue
+        media = media.strip().lstrip("./")
+        # Old lessons sometimes stored "dj4e-media/lesson-..."
+        if media.startswith("dj4e-media/"):
+            media = media[len("dj4e-media/") :]
+        if media in seen:
+            continue
+        seen.add(media)
+        paths.append(media)
+
+paths.sort()
+out_path.write_text("\n".join(paths) + ("\n" if paths else ""), encoding="utf-8")
+print(f"lessons media paths: {len(paths)}", file=sys.stderr)
+PY
+else
+    (
+        cd "$MEDIA_ROOT" || exit 1
+        find . -type f \( -iname "*.mov" -o -iname "*.mp4" -o -iname "*.m4v" \) -print |
+            sed 's#^\./##' |
+            LC_ALL=C sort
+    ) > "$MEDIA_LIST" || fail "Could not build media list"
+fi
 
 : > "$LOG_FILE"
 
 log "Batch started: $(date)"
 log "MEDIA_ROOT=$MEDIA_ROOT"
-log "OUTPUT_ROOT=$OUTPUT_ROOT"
+log "WHISPER_ROOT=$WHISPER_ROOT"
 log "COURSE_HINT=$COURSE_HINT"
-log "OUTPUT_ROOT=$OUTPUT_ROOT"
+log "FROM_LESSONS=$FROM_LESSONS"
+if [ "$FROM_LESSONS" -eq 1 ]; then
+    log "LESSONS_JSON=$LESSONS_JSON"
+fi
 log "WHISPER=$WHISPER"
 log "MODEL=$MODEL"
 log "VOCAB_FILES:"
@@ -569,22 +629,6 @@ done 3< "$MEDIA_LIST"
 
 log ""
 log "=================================================="
-log "Transcription pass complete"
-log "TOTAL=$TOTAL"
-log "STAGED=$DONE_COUNT"
-log "SKIPPED=$SKIP_COUNT"
-log "FAILED=$FAIL_COUNT"
-
-if [ "$FAIL_COUNT" -ne 0 ]; then
-    log "Atomic publish cancelled because one or more files failed. Existing transcripts were left untouched."
-    log "LOG=$LOG_FILE"
-    log "=================================================="
-    exit 1
-fi
-
-log "Publishing staged transcript files..."
-publish_staged_files || fail "Could not publish staged transcript files"
-
 log "Batch finished: $(date)"
 log "TOTAL=$TOTAL"
 log "DONE=$DONE_COUNT"
@@ -592,6 +636,11 @@ log "SKIPPED=$SKIP_COUNT"
 log "FAILED=$FAIL_COUNT"
 log "LOG=$LOG_FILE"
 log "=================================================="
+
+if [ "$FAIL_COUNT" -ne 0 ]; then
+    log "NOTE: completed transcripts were kept; failed/missing ones can be retried."
+    exit 1
+fi
 
 SUCCESS=1
 exit 0

@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
         "--whisper-root",
         type=Path,
         default=None,
-        help="Whisper tree (default: $OUTPUT_ROOT)",
+        help="Whisper tree (default: $WHISPER_ROOT)",
     )
     parser.add_argument(
         "--remove",
@@ -44,10 +44,10 @@ def parse_args() -> argparse.Namespace:
 def default_whisper_root() -> Path:
     import os
 
-    value = os.environ.get("OUTPUT_ROOT")
+    value = os.environ.get("WHISPER_ROOT")
     if not value:
         raise SystemExit(
-            "Error: set OUTPUT_ROOT (source media.env) or pass --whisper-root"
+            "Error: set WHISPER_ROOT (source media.env) or pass --whisper-root"
         )
     return Path(value)
 
