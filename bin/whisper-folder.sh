@@ -4,7 +4,7 @@
 # macOS Bash 3.2 friendly
 # Scans top-level .mov, .mp4, and .m4v files only.
 # Writes transcripts to txt/, vtt/, and srt/.
-# If whisper-cleanup.py and whisper-replacements.txt exist, cleans txt/vtt/srt.
+# If whisper-cleanup.py and *whisper-replacements* exist, cleans txt/vtt/srt.
 
 set -u
 
@@ -110,8 +110,30 @@ find_vocab_file() {
     find_upward_file "whisper-vocabulary.txt"
 }
 
-find_replacements_file() {
-    find_upward_file "whisper-replacements.txt"
+find_matching_files_upward() {
+    pattern="$1"
+    dir="$ROOT"
+
+    while [ "$dir" != "/" ]; do
+        matches="$(find "$dir" -maxdepth 1 -type f -name "$pattern" -print | LC_ALL=C sort)"
+        if [ -n "$matches" ]; then
+            printf "%s\n" "$matches"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+
+    matches="$(find "$HOME" -maxdepth 1 -type f -name "$pattern" -print | LC_ALL=C sort)"
+    if [ -n "$matches" ]; then
+        printf "%s\n" "$matches"
+        return 0
+    fi
+
+    return 1
+}
+
+find_replacements_files() {
+    find_matching_files_upward "*whisper-replacements*"
 }
 
 build_prompt() {
@@ -171,11 +193,7 @@ already_done() {
 apply_replacements() {
     transcript_file="$1"
 
-    if [ -z "${REPLACEMENTS_FILE:-}" ]; then
-        return 0
-    fi
-
-    if [ ! -f "$REPLACEMENTS_FILE" ]; then
+    if [ -z "${REPLACEMENTS_FILES:-}" ]; then
         return 0
     fi
 
@@ -191,14 +209,22 @@ apply_replacements() {
 
     log "CLEANUP: $transcript_file"
 
-    if ! python3 "$CLEANUP_PY" \
-        --replacements "$REPLACEMENTS_FILE" \
-        "$transcript_file" >>"$LOG_FILE" 2>&1; then
-        log "WARNING: cleanup failed for $transcript_file"
-        return 1
-    fi
+    status=0
+    while IFS= read -r replacements_file
+    do
+        [ -n "$replacements_file" ] || continue
+        [ -f "$replacements_file" ] || continue
+        if ! python3 "$CLEANUP_PY" \
+            --replacements "$replacements_file" \
+            "$transcript_file" >>"$LOG_FILE" 2>&1; then
+            log "WARNING: cleanup failed for $transcript_file ($replacements_file)"
+            status=1
+        fi
+    done <<EOF
+$REPLACEMENTS_FILES
+EOF
 
-    return 0
+    return "$status"
 }
 
 process_file() {
@@ -382,7 +408,7 @@ fi
 
 VOCAB_FILE="$(find_vocab_file)" || fail "Vocabulary file not found while walking upward from $ROOT. Expected whisper-vocabulary.txt"
 
-REPLACEMENTS_FILE="$(find_replacements_file || true)"
+REPLACEMENTS_FILES="$(find_replacements_files || true)"
 
 mkdir -p "$TXT_DIR" "$VTT_DIR" "$SRT_DIR" "$TMP_DIR"
 
@@ -401,7 +427,12 @@ log "COURSE_HINT=$COURSE_HINT"
 log "WHISPER=$WHISPER"
 log "MODEL=$MODEL"
 log "VOCAB_FILE=$VOCAB_FILE"
-log "REPLACEMENTS_FILE=${REPLACEMENTS_FILE:-none}"
+if [ -n "${REPLACEMENTS_FILES:-}" ]; then
+    log "REPLACEMENTS_FILES:"
+    printf "%s\n" "$REPLACEMENTS_FILES" | sed 's/^/  /' | tee -a "$LOG_FILE"
+else
+    log "REPLACEMENTS_FILES=none"
+fi
 log "LOG_FILE=$LOG_FILE"
 log "TXT_DIR=$TXT_DIR"
 log "VTT_DIR=$VTT_DIR"
@@ -460,3 +491,12 @@ log "SKIPPED=$SKIP_COUNT"
 log "FAILED=$FAIL_COUNT"
 log "LOG=$LOG_FILE"
 log "=================================================="
+log ""
+if [ -n "${REPLACEMENTS_FILES:-}" ]; then
+    log "NOTE: New transcripts were cleaned with *whisper-replacements* during this run."
+    log "TIP: SKIPPED files were not re-cleaned. To re-apply replacements later:"
+else
+    log "TIP: Add a *whisper-replacements* file under $ROOT (optional),"
+    log "     then re-apply cleanup to transcripts with:"
+fi
+log "  whisper-cleanup.py"

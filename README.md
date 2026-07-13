@@ -143,8 +143,8 @@ course-www/
   youtube/
     youtube-playlist.jsonl   # from dump-youtube-playlist.sh
   whisper/
-    whisper-vocabulary.txt   # optional, searched upward
-    whisper-replacements.txt # optional cleanup rules
+    whisper-vocabulary.txt   # optional, searched upward (*whisper-vocabulary*)
+    whisper-replacements.txt # optional cleanup rules (*whisper-replacements*)
     txt/...
     vtt/...
     srt/...
@@ -163,6 +163,7 @@ Media binaries usually live outside the www tree, for example:
 |---|---|
 | `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
 | `compare-lessons-root.py` | Diff `lessons.json` vs `MEDIA_ROOT` |
+| `compare-lessons-youtube.py` | Diff `lessons.json` vs YouTube playlist JSONL |
 | `compare-whisper-root.py` | Diff whisper artifacts vs `MEDIA_ROOT` (`--remove` orphans) |
 | `whisper-media.sh` | Recursively transcribe all media under `MEDIA_ROOT` |
 | `whisper-lessons` | Transcribe only media paths listed in `lessons.json` |
@@ -170,7 +171,7 @@ Media binaries usually live outside the www tree, for example:
 | `bootstrap-media-yaml.py` | Build/refresh `media.yaml` |
 | `whisper-one.sh` | Transcribe a single media file next to itself |
 | `whisper-folder.sh` | Transcribe top-level media in the current folder |
-| `whisper-cleanup.py` | Apply vocabulary replacements to txt/vtt/srt |
+| `whisper-cleanup.py` | Apply `*whisper-replacements*` rules to txt/vtt/srt |
 | `compare-media-root.py` | Diff `MEDIA_ROOT` vs `media.yaml` (after bootstrap) |
 | `compare-youtube.py` | Diff playlist JSONL vs `media.yaml` (after bootstrap) |
 | `compare-lessons.py` | Diff `lessons.json` vs `media.yaml` (after bootstrap) |

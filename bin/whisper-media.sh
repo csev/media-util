@@ -226,6 +226,26 @@ find_vocab_files() {
     return 1
 }
 
+find_replacements_files() {
+    # Same search order as vocabulary: first directory with matches wins,
+    # then use every *whisper-replacements* file there (sorted).
+    if find_matching_files_upward_from "*whisper-replacements*" "$WHISPER_ROOT"; then
+        return 0
+    fi
+
+    if find_matching_files_upward_from "*whisper-replacements*" "$MEDIA_ROOT"; then
+        return 0
+    fi
+
+    matches="$(find "$HOME" -maxdepth 1 -type f -name "*whisper-replacements*" -print | LC_ALL=C sort)"
+    if [ -n "$matches" ]; then
+        printf "%s\n" "$matches"
+        return 0
+    fi
+
+    return 1
+}
+
 build_prompt() {
     printf "%s\n" "$VOCAB_FILES" |
     while IFS= read -r vocab_file
@@ -300,7 +320,7 @@ already_done() {
 apply_replacements() {
     transcript_file="$1"
 
-    if [ -z "${REPLACEMENTS_FILE:-}" ] || [ ! -f "$REPLACEMENTS_FILE" ]; then
+    if [ -z "${REPLACEMENTS_FILES:-}" ]; then
         return 0
     fi
 
@@ -316,14 +336,22 @@ apply_replacements() {
 
     log "CLEANUP: $transcript_file"
 
-    if ! python3 "$CLEANUP_PY" \
-        --replacements "$REPLACEMENTS_FILE" \
-        "$transcript_file" >>"$LOG_FILE" 2>&1; then
-        log "WARNING: cleanup failed for $transcript_file"
-        return 1
-    fi
+    status=0
+    while IFS= read -r replacements_file
+    do
+        [ -n "$replacements_file" ] || continue
+        [ -f "$replacements_file" ] || continue
+        if ! python3 "$CLEANUP_PY" \
+            --replacements "$replacements_file" \
+            "$transcript_file" >>"$LOG_FILE" 2>&1; then
+            log "WARNING: cleanup failed for $transcript_file ($replacements_file)"
+            status=1
+        fi
+    done <<EOF
+$REPLACEMENTS_FILES
+EOF
 
-    return 0
+    return "$status"
 }
 
 process_file() {
@@ -511,7 +539,7 @@ fi
 
 VOCAB_FILES="$(find_vocab_files)" || \
     fail "No vocabulary files containing 'whisper-vocabulary' were found while walking upward from $WHISPER_ROOT or $MEDIA_ROOT"
-REPLACEMENTS_FILE="$(find_config_file "whisper-replacements.txt" || true)"
+REPLACEMENTS_FILES="$(find_replacements_files || true)"
 VOCAB_PROMPT="$(build_prompt)"
 
 SUPPORTS_PROMPT=0
@@ -592,7 +620,12 @@ log "WHISPER=$WHISPER"
 log "MODEL=$MODEL"
 log "VOCAB_FILES:"
 printf "%s\n" "$VOCAB_FILES" | sed 's/^/  /' | tee -a "$LOG_FILE"
-log "REPLACEMENTS_FILE=${REPLACEMENTS_FILE:-none}"
+if [ -n "${REPLACEMENTS_FILES:-}" ]; then
+    log "REPLACEMENTS_FILES:"
+    printf "%s\n" "$REPLACEMENTS_FILES" | sed 's/^/  /' | tee -a "$LOG_FILE"
+else
+    log "REPLACEMENTS_FILES=none"
+fi
 log "LOG_FILE=$LOG_FILE"
 log "TXT_DIR=$TXT_DIR"
 log "VTT_DIR=$VTT_DIR"
@@ -636,6 +669,15 @@ log "SKIPPED=$SKIP_COUNT"
 log "FAILED=$FAIL_COUNT"
 log "LOG=$LOG_FILE"
 log "=================================================="
+log ""
+if [ -n "${REPLACEMENTS_FILES:-}" ]; then
+    log "NOTE: New transcripts were cleaned with *whisper-replacements* during this run."
+    log "TIP: SKIPPED files were not re-cleaned. To re-apply replacements later:"
+else
+    log "TIP: Add a *whisper-replacements* file under $WHISPER_ROOT (optional),"
+    log "     then re-apply cleanup to transcripts with:"
+fi
+log "  whisper-cleanup.py"
 
 if [ "$FAIL_COUNT" -ne 0 ]; then
     log "NOTE: completed transcripts were kept; failed/missing ones can be retried."

@@ -40,9 +40,22 @@ dump_playlist() {
 if [ -n "$OUTPUT_PATH" ]; then
     mkdir -p "$(dirname "$OUTPUT_PATH")"
     tmp_path="$OUTPUT_PATH.tmp.$$"
+    # yt-dlp may exit non-zero for unavailable/members-only entries even with
+    # --ignore-errors; keep whatever JSONL lines were produced.
+    set +e
     dump_playlist > "$tmp_path"
+    status=$?
+    set -e
+    if [ ! -s "$tmp_path" ]; then
+        rm -f "$tmp_path"
+        echo "Error: yt-dlp produced no playlist output (exit $status)" >&2
+        exit 1
+    fi
     mv -f "$tmp_path" "$OUTPUT_PATH"
     echo "Wrote $OUTPUT_PATH"
+    if [ "$status" -ne 0 ]; then
+        echo "Warning: yt-dlp exited $status (some entries may be missing)" >&2
+    fi
 else
     dump_playlist
 fi
