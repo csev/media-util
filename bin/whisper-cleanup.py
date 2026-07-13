@@ -22,26 +22,42 @@ import sys
 import tempfile
 
 
-def parse_replacement_line(line: str) -> tuple[str, str] | None:
-    """Parse one rule: 'from => to', or tab/2+ spaces separated (DJ4E style)."""
-    line = line.strip()
-    if not line or line.startswith("#"):
+def parse_replacement_line(
+    line: str,
+    *,
+    path: pathlib.Path | None = None,
+    lineno: int | None = None,
+) -> tuple[str, str] | None:
+    """Parse one rule: ``from => to``.
+
+    Blank lines and ``#`` comments are ignored. Tab-separated rules are an error.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
         return None
 
-    if "=>" in line:
-        left, right = line.split("=>", 1)
-    elif "\t" in line:
-        left, right = line.split("\t", 1)
-    else:
-        # Two or more spaces: incorrect<spaces>correct
-        match = re.match(r"^(.+?) {2,}(.+)$", line)
-        if not match:
-            return None
-        left, right = match.group(1), match.group(2)
+    where = ""
+    if path is not None and lineno is not None:
+        where = f"{path}:{lineno}: "
+    elif path is not None:
+        where = f"{path}: "
 
+    if "\t" in line:
+        raise ValueError(
+            f"{where}tab separators are not allowed; use 'incorrect => correct'"
+        )
+
+    if "=>" not in stripped:
+        raise ValueError(
+            f"{where}expected 'incorrect => correct', got: {stripped!r}"
+        )
+
+    left, right = stripped.split("=>", 1)
     left = left.strip()
     right = right.strip()
-    if not left or left == right:
+    if not left:
+        raise ValueError(f"{where}empty left-hand side in: {stripped!r}")
+    if left == right:
         return None
     return left, right
 
@@ -50,8 +66,11 @@ def load_replacements(path: pathlib.Path) -> list[tuple[str, str]]:
     replacements: list[tuple[str, str]] = []
 
     with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            parsed = parse_replacement_line(line)
+        for lineno, line in enumerate(f, start=1):
+            try:
+                parsed = parse_replacement_line(line, path=path, lineno=lineno)
+            except ValueError as exc:
+                raise SystemExit(f"Error: {exc}") from exc
             if parsed is None:
                 continue
             replacements.append(parsed)
@@ -133,7 +152,6 @@ def cleanup_file(path: pathlib.Path, replacements: list[tuple[str, str]], make_b
         output.append(cleaned)
 
     if output == lines:
-        print(f"NO CHANGES: {path}")
         return
 
     if make_backup:
