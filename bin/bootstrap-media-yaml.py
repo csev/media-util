@@ -5,8 +5,10 @@ By default the inventory is scanned from MEDIA_ROOT / --media-root
 (.mov / .mp4 / .m4v). Pass --files only to use an explicit list.
 
 Descriptions prefer WHISPER_ROOT/desc (whisper-desc) when present, else the
-YouTube playlist description. Preserves manually edited youtube_id / kaltura_id
-on rerun via ruamel.yaml (AI descriptions refresh whenever the desc file exists).
+YouTube playlist description. Titles are composed as
+``DJ nn.mm <AI title> (duration)`` from lessons.json + whisper/desc.
+Preserves manually edited youtube_id / kaltura_id on rerun via ruamel.yaml
+(AI descriptions refresh whenever the desc file exists).
 """
 
 from __future__ import annotations
@@ -27,6 +29,10 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 
+# Same-directory helper (works when this file is loaded via importlib too).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from youtube_text import sanitize_youtube_tags, sanitize_youtube_text  # noqa: E402
+
 
 # Defaults are relative to the course working directory, not this util repo.
 CWD = Path.cwd()
@@ -39,6 +45,7 @@ ENTRY_KEYS = (
     "md5",
     "duration",
     "duration_text",
+    "tags",
     "description",
 )
 
@@ -55,15 +62,26 @@ GLOBAL_KEYS = (
 )
 
 REVIEW_MARKER_RE = re.compile(r"Review:|\(\s*review\s*\)", re.IGNORECASE)
+DJ_PREFIX_RE = re.compile(r"^(DJ\s+\d+\.\d+)\b", re.IGNORECASE)
+TRAILING_DURATION_RE = re.compile(r"\s*\((?:\d+:)+\d+\)\s*$")
 
 
 def is_review_title(title: str) -> bool:
-    return bool(REVIEW_MARKER_RE.search(title))
+    """True when a lessons.json title marks a listing as a review.
+
+    Review is a lessons.json-only concept; it is not stored in media.yaml.
+    Matches leading ``Review…``, embedded ``Review:``, or ``(review)``.
+    """
+    text = title.strip()
+    if text.lower().startswith("review"):
+        return True
+    return bool(REVIEW_MARKER_RE.search(text))
 
 
 def title_without_review_marker(title: str) -> str:
-    """Strip Review: / (review) markers for conflict comparison."""
+    """Strip Review: / (review) markers for lessons.json conflict comparison."""
     text = title.strip()
+    text = re.sub(r"^Review:\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(
         r"^(DJ\s+\d+\.\d+)\s+Review:\s*",
         r"\1 ",
@@ -230,6 +248,9 @@ def load_lessons_media_map(
     Identical reuses are allowed. Conflicting titles/youtube IDs for the same
     media path are collected; when ``strict`` is true they raise SystemExit
     (for paths in ``relevant`` when provided).
+
+    When the same media appears as both a primary and a Review: listing in
+    lessons.json, prefer the non-review wording (Review stays lessons-only).
     """
     try:
         text = lessons_path.read_text(encoding="utf-8")
@@ -525,25 +546,101 @@ def resolve_whisper_root(args: argparse.Namespace) -> Path | None:
     return None
 
 
-def load_ai_description(whisper_root: Path | None, rel_media: str) -> str | None:
-    """Read whisper-desc output: title / tags / description (blank-line separated)."""
-    if whisper_root is None:
+def normalize_tags(value: Any) -> str | None:
+    """Normalize tags to a comma-separated string, or None."""
+    if value is None:
         return None
+    if isinstance(value, str):
+        tags = [t.strip() for t in value.split(",") if t.strip()]
+        text = ", ".join(tags) if tags else None
+    elif isinstance(value, list):
+        tags = [str(t).strip() for t in value if str(t).strip()]
+        text = ", ".join(tags) if tags else None
+    else:
+        return None
+    if text is None:
+        return None
+    cleaned = sanitize_youtube_tags(text)
+    return cleaned or None
+
+
+def load_ai_metadata(
+    whisper_root: Path | None, rel_media: str
+) -> tuple[str | None, str | None, str | None]:
+    """Read whisper-desc output: title / tags / description (blank-line separated).
+
+    Returns (title, tags, description). Tags are a comma-separated string.
+    Any field may be None if missing/unusable.
+    """
+    if whisper_root is None:
+        return None, None, None
     stem = Path(rel_media).with_suffix("").as_posix()
     path = whisper_root / "desc" / f"{stem}.txt"
     if not path.is_file():
-        return None
+        return None, None, None
     try:
         text = path.read_text(encoding="utf-8").strip()
     except OSError:
-        return None
+        return None, None, None
     if not text:
-        return None
+        return None, None, None
     parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     if len(parts) < 3:
-        return None
+        return None, None, None
+
+    ai_title = parts[0].split("\n", 1)[0].strip() or None
+    tags = normalize_tags(parts[1])
     description = "\n\n".join(parts[2:]).strip()
-    return description or None
+    if ai_title:
+        ai_title = sanitize_youtube_text(ai_title)
+    if description:
+        description = sanitize_youtube_text(description)
+    return ai_title, tags, (description or None)
+
+
+def format_title_duration(seconds: int) -> str:
+    """Format seconds for titles: m:ss or h:mm:ss (no leading zero on minutes)."""
+    if seconds < 0:
+        seconds = 0
+    hours, rem = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def extract_dj_prefix(title: str) -> str | None:
+    match = DJ_PREFIX_RE.match(title.strip())
+    return match.group(1) if match else None
+
+
+def clean_title_body(text: str) -> str:
+    """Strip DJ prefix, Review marker, and trailing (duration) from a title body."""
+    body = text.strip()
+    body = DJ_PREFIX_RE.sub("", body).strip()
+    body = re.sub(r"^Review:\s*", "", body, flags=re.IGNORECASE).strip()
+    body = re.sub(r"\(\s*review\s*\)", "", body, flags=re.IGNORECASE).strip()
+    body = TRAILING_DURATION_RE.sub("", body).strip()
+    body = re.sub(r"\s+", " ", body).strip()
+    return body
+
+
+def compose_media_title(
+    lesson_title: str,
+    ai_title: str | None,
+    duration_seconds: int,
+) -> str:
+    """Build ``DJ nn.mm <AI title> (duration)`` (no Review: — lessons.json only)."""
+    prefix = extract_dj_prefix(lesson_title)
+    if not prefix:
+        prefix = "DJ"
+    body = clean_title_body(ai_title) if ai_title else ""
+    if not body:
+        body = clean_title_body(lesson_title)
+    if not body:
+        body = "Untitled"
+    duration = format_title_duration(duration_seconds)
+    return sanitize_youtube_text(f"{prefix} {body} ({duration})")
 
 
 def load_media_files(files_path: Path) -> list[str]:
@@ -767,8 +864,10 @@ def ordered_entry(
     duration: int,
     youtube_id: Any = None,
     description: Any = None,
+    tags: Any = None,
     force_youtube: bool = False,
     force_description: bool = False,
+    force_tags: bool = False,
 ) -> CommentedMap:
     """Update an entry in place so ruamel comments/formatting are preserved."""
     preserved = {key: existing.get(key, None) for key in PRESERVE_KEYS}
@@ -785,12 +884,23 @@ def ordered_entry(
     # Always preserve manually set kaltura_id.
     preserved["kaltura_id"] = existing.get("kaltura_id", None)
 
+    existing_tags = normalize_tags(existing.get("tags"))
+    incoming_tags = normalize_tags(tags)
+    chosen_tags = choose_field(existing_tags, incoming_tags, force=force_tags)
+
+    # Drop legacy keys that must not appear in media.yaml.
+    existing.pop("review", None)
+
     # Ensure known keys exist in the required order by rebuilding only when needed.
     known = [key for key in existing.keys() if key in ENTRY_KEYS]
     needs_reorder = known != list(ENTRY_KEYS)
     duration_text = format_duration_text(duration)
     if needs_reorder or not existing:
-        extras = [(key, value) for key, value in existing.items() if key not in ENTRY_KEYS]
+        extras = [
+            (key, value)
+            for key, value in existing.items()
+            if key not in ENTRY_KEYS and key != "review"
+        ]
         existing.clear()
         existing["title"] = title
         existing["youtube_id"] = preserved["youtube_id"]
@@ -799,6 +909,7 @@ def ordered_entry(
         existing["md5"] = md5
         existing["duration"] = duration
         existing["duration_text"] = duration_text
+        existing["tags"] = chosen_tags
         for key, value in extras:
             existing[key] = value
         existing["description"] = preserved["description"]
@@ -812,6 +923,7 @@ def ordered_entry(
     existing["md5"] = md5
     existing["duration"] = duration
     existing["duration_text"] = duration_text
+    existing["tags"] = chosen_tags
     return existing
 
 
@@ -823,6 +935,12 @@ def rebuild_entries(
     """Return entries in media inventory order, then any orphaned keys."""
     media_set = set(media_files)
     orphans = [key for key in old_entries.keys() if key not in media_set]
+
+    # Strip legacy review flags from orphans (Review is lessons.json-only).
+    for key in orphans:
+        entry = old_entries.get(key)
+        if isinstance(entry, dict):
+            entry.pop("review", None)
 
     # If order already matches and there are no inserts/moves, update in place.
     expected = list(media_files) + orphans
@@ -867,6 +985,8 @@ def main(argv: list[str] | None = None) -> int:
     youtube_unmatched: list[str] = []
     ai_desc_count = 0
     yt_desc_count = 0
+    ai_tags_count = 0
+    ai_title_count = 0
 
     for rel_name in media_files:
         media_path = media_root / rel_name
@@ -879,7 +999,7 @@ def main(argv: list[str] | None = None) -> int:
             existing_title = None
 
         is_new = rel_name not in old_entries
-        title = resolve_title(
+        lesson_title = resolve_title(
             rel_name,
             title_map,
             existing_title,
@@ -889,7 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
 
         yt_entry = match_youtube_entry(
             rel_name,
-            lesson_title=title_map.get(rel_name) or title,
+            lesson_title=title_map.get(rel_name) or lesson_title,
             lesson_youtube_id=lesson_youtube_map.get(rel_name),
             by_id=by_id,
             by_title=by_title,
@@ -913,27 +1033,46 @@ def main(argv: list[str] | None = None) -> int:
                 stacklevel=2,
             )
 
-        ai_description = load_ai_description(whisper_root, rel_name)
+        ai_title, ai_tags, ai_description = load_ai_metadata(whisper_root, rel_name)
+        if ai_title:
+            ai_title_count += 1
         if ai_description:
             description = ai_description
             force_description = True
             ai_desc_count += 1
         else:
-            description = youtube_description
+            description = (
+                sanitize_youtube_text(youtube_description)
+                if youtube_description
+                else None
+            )
             force_description = False
             if description:
                 yt_desc_count += 1
+
+        if ai_tags:
+            tags = ai_tags
+            force_tags = True
+            ai_tags_count += 1
+        else:
+            tags = None
+            force_tags = False
+
+        duration = probe_duration(ffprobe, media_path)
+        title = compose_media_title(lesson_title, ai_title, duration)
 
         updated[rel_name] = ordered_entry(
             existing,
             title=title,
             size=media_path.stat().st_size,
             md5=file_md5(media_path),
-            duration=probe_duration(ffprobe, media_path),
+            duration=duration,
             youtube_id=youtube_id,
             description=description,
+            tags=tags,
             force_youtube=args.force_youtube,
             force_description=force_description,
+            force_tags=force_tags,
         )
 
     new_entries, orphans = rebuild_entries(old_entries, media_files, updated)
@@ -956,6 +1095,9 @@ def main(argv: list[str] | None = None) -> int:
             else " (no WHISPER_ROOT)"
         )
     )
+    print(f"Titles: {ai_title_count} from whisper/desc, "
+          f"{len(media_files) - ai_title_count} from lessons.json fallback")
+    print(f"Tags: {ai_tags_count} from whisper/desc")
     if playlist:
         print(
             f"YouTube matches: {youtube_matched}/{len(media_files)} "

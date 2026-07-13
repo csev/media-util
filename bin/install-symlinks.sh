@@ -38,6 +38,9 @@ link_one whisper-lessons
 link_one whisper-one.sh
 link_one bootstrap-media-yaml.py
 link_one dump-youtube-playlist.sh
+link_one sync-lessons-titles-from-media.py
+link_one update-youtube-from-media.py
+link_one test-youtube-oauth.py
 link_one compare-media-root.py
 link_one compare-youtube.py
 link_one compare-lessons.py

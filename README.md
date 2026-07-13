@@ -128,17 +128,34 @@ Builds / refreshes `media.yaml` from:
 - `MEDIA_ROOT` (inventory: every `.mov` / `.mp4` / `.m4v`)
 - `lessons.json` (titles and youtube ids when present)
 - `youtube/youtube-playlist.jsonl` (youtube id / description matching)
-- `WHISPER_ROOT/desc/...` (AI descriptions from `whisper-desc`, preferred)
+- `WHISPER_ROOT/desc/...` (AI descriptions and tags from `whisper-desc`, preferred)
 
 Also records `size`, `md5`, `duration`, and `duration_text` from disk.
 Description priority: AI `whisper/desc` if present, else YouTube playlist
-(empty fields only, unless `--force-youtube`). Existing `youtube_id` is filled
-when empty (`--force-youtube` to overwrite). `kaltura_id` is preserved.
+(empty fields only, unless `--force-youtube`). Tags come from AI `whisper/desc`
+when present (comma-separated string). Existing `youtube_id` is filled when empty
+(`--force-youtube` to overwrite). `kaltura_id` is preserved.
 
 Top-level globals are copied from `media.env` on each run:
 
 `course_root`, `media_root`, `whisper_root`, `youtube_dir`, `youtube_playlist`,
 and `course_hint`.
+
+### 7. Push titles/descriptions to YouTube (optional)
+
+Requires a Google Cloud OAuth Desktop client with YouTube Data API v3 enabled.
+Save the client JSON as `~/.ssh/youtube_client_secret.json` (or set
+`YOUTUBE_CLIENT_SECRETS`).
+
+```bash
+pip3 install -r /Users/csev/htdocs/media-util/requirements.txt
+test-youtube-oauth.py                     # smoke-test OAuth + API
+update-youtube-from-media.py              # dry-run diffs
+update-youtube-from-media.py --apply      # write to YouTube
+```
+
+First run opens a browser for OAuth; the token is cached at
+`$YOUTUBE_DIR/youtube-oauth-token.json`.
 
 ## Course layout
 
@@ -169,6 +186,8 @@ Media binaries usually live outside the www tree, for example:
 | Command | Purpose |
 |---|---|
 | `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
+| `test-youtube-oauth.py` | Smoke-test OAuth client + YouTube API access |
+| `update-youtube-from-media.py` | Push `media.yaml` titles/descriptions to YouTube |
 | `compare-lessons-root.py` | Diff `lessons.json` vs `MEDIA_ROOT` |
 | `compare-lessons-youtube.py` | Diff `lessons.json` vs YouTube playlist JSONL |
 | `compare-whisper-root.py` | Diff whisper artifacts vs `MEDIA_ROOT` (`--remove` orphans) |
@@ -191,9 +210,11 @@ Media binaries usually live outside the www tree, for example:
 | `COURSE_ROOT` | `media.env` | Course www root (pwd check) |
 | `MEDIA_ROOT` | whisper / compare / bootstrap | Media binary tree |
 | `WHISPER_ROOT` | whisper tools / `whisper-desc` | Whisper output tree |
-| `YOUTUBE_DIR` | dump / bootstrap | Course `youtube/` folder |
+| `YOUTUBE_DIR` | dump / bootstrap / YouTube update | Course `youtube/` folder |
 | `YOUTUBE_PLAYLIST` | `dump-youtube-playlist.sh` | Course playlist URL |
 | `YOUTUBE_PLAYLIST_JSONL` | dump / bootstrap | Optional override for the JSONL path |
+| `YOUTUBE_CLIENT_SECRETS` | `update-youtube-from-media.py` | OAuth client JSON path |
+| `YOUTUBE_TOKEN` | `update-youtube-from-media.py` | OAuth token cache path |
 | `COURSE_HINT` | `whisper-media.sh`, `whisper-folder.sh` | Prompt context for Whisper |
 | `MODEL` / `WHISPER_MODEL` | whisper scripts | ggml model path |
 | `OLLAMA_MODEL` / `OLLAMA_HOST` | `whisper-desc` | Local LLM for descriptions |

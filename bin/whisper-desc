@@ -25,6 +25,8 @@ import time
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from youtube_text import sanitize_youtube_tags, sanitize_youtube_text  # noqa: E402
 
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 DEFAULT_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
@@ -36,19 +38,22 @@ Read the following lecture transcript.
 Write YouTube metadata in exactly this format:
 
 TITLE
-<one-line factual YouTube title>
+one-line factual YouTube title
 
 TAGS
-<comma-separated tags>
+comma-separated tags
 
 DESCRIPTION
-<two factual paragraphs>
+two factual paragraphs
 
 Requirements:
 - Do not use hype.
 - Do not invent information.
 - Mention the main technical topics.
 - Title should be concise and suitable for YouTube.
+- Never use HTML tags or angle brackets (< >) in the title, tags, or description.
+  When naming HTML/XML elements, write them in backticks without brackets,
+  e.g. `html`, `head`, `body`, `a` — never <html> or </body>.
 - Tags should be relevant technical keywords, comma-separated.
 - Description must be exactly two paragraphs; each paragraph may be a few sentences covering the main points of the lecture.
 - Return only the TITLE, TAGS, and DESCRIPTION sections — no other commentary.
@@ -200,6 +205,11 @@ def parse_metadata(raw: str) -> tuple[str, str, str]:
     # Normalize tags to a single comma-separated line.
     tags = re.sub(r"\s*,\s*", ", ", tags.replace("\n", " "))
     tags = re.sub(r"\s+", " ", tags).strip(" ,")
+
+    # YouTube rejects HTML-like markup in titles/tags/descriptions.
+    title = sanitize_youtube_text(title)
+    tags = sanitize_youtube_tags(tags)
+    description = sanitize_youtube_text(description)
 
     return title, tags, description
 

@@ -125,15 +125,42 @@ export OLLAMA_MODEL=qwen3:4b
 export OLLAMA_HOST=http://localhost:11434
 ```
 
-## Python package for bootstrap
+## Python packages
 
-`bootstrap-media-yaml.py` needs `ruamel.yaml`:
+`bootstrap-media-yaml.py` needs `ruamel.yaml`.
+`update-youtube-from-media.py` also needs the Google API client libraries:
 
 ```bash
 cd /Users/csev/htdocs/media-util
 pip3 install -r requirements.txt
 ```
 
+### YouTube OAuth (for update-youtube-from-media.py)
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), enable
+   **YouTube Data API v3**.
+2. Create an **OAuth client ID** of type **Desktop app**.
+3. Download the JSON and save it as:
+
+```text
+~/.ssh/youtube_client_secret.json
+```
+
+   (or set `YOUTUBE_CLIENT_SECRETS` to the path).
+
+4. Smoke-test the secret, then dry-run / apply:
+
+```bash
+source /Users/csev/htdocs/dj4e/media.env
+cd /Users/csev/htdocs/dj4e
+test-youtube-oauth.py
+update-youtube-from-media.py
+update-youtube-from-media.py --apply
+```
+
+`test-youtube-oauth.py` opens a browser on first run, caches the token at
+`$YOUTUBE_DIR/youtube-oauth-token.json`, and verifies a read-only API call.
+Use `--reauth` to force a new consent.
 ## Quick check
 
 ```bash
