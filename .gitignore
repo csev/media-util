@@ -1,0 +1,6 @@
+# Ignore local runtime artifacts if any sneak in
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+.whisper-tmp/
