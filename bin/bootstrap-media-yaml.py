@@ -4,7 +4,9 @@
 By default the inventory is scanned from MEDIA_ROOT / --media-root
 (.mov / .mp4 / .m4v). Pass --files only to use an explicit list.
 
-Preserves manually edited description / youtube_id / kaltura_id on rerun via ruamel.yaml.
+Descriptions prefer WHISPER_ROOT/desc (whisper-desc) when present, else the
+YouTube playlist description. Preserves manually edited youtube_id / kaltura_id
+on rerun via ruamel.yaml (AI descriptions refresh whenever the desc file exists).
 """
 
 from __future__ import annotations
@@ -36,10 +38,80 @@ ENTRY_KEYS = (
     "size",
     "md5",
     "duration",
+    "duration_text",
     "description",
 )
 
 PRESERVE_KEYS = ("description", "youtube_id", "kaltura_id")
+
+# Top-level media.yaml keys mirrored from media.env.
+GLOBAL_KEYS = (
+    "course_root",
+    "media_root",
+    "whisper_root",
+    "youtube_dir",
+    "youtube_playlist",
+    "course_hint",
+)
+
+REVIEW_MARKER_RE = re.compile(r"Review:|\(\s*review\s*\)", re.IGNORECASE)
+
+
+def is_review_title(title: str) -> bool:
+    return bool(REVIEW_MARKER_RE.search(title))
+
+
+def title_without_review_marker(title: str) -> str:
+    """Strip Review: / (review) markers for conflict comparison."""
+    text = title.strip()
+    text = re.sub(
+        r"^(DJ\s+\d+\.\d+)\s+Review:\s*",
+        r"\1 ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\(\s*review\s*\)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def env_or_none(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def apply_course_globals(data: CommentedMap, args: argparse.Namespace) -> None:
+    """Write media.env-backed globals onto the YAML root map."""
+    data["course_root"] = str(args.course_root)
+    data["media_root"] = str(args.media_root)
+    data["whisper_root"] = env_or_none("WHISPER_ROOT")
+    data["youtube_dir"] = env_or_none("YOUTUBE_DIR")
+    data["youtube_playlist"] = env_or_none("YOUTUBE_PLAYLIST")
+    data["course_hint"] = env_or_none("COURSE_HINT")
+    # Drop legacy www_root if present from older media.yaml files.
+    if "www_root" in data:
+        del data["www_root"]
+
+
+def order_root_map(data: CommentedMap) -> CommentedMap:
+    """Keep globals then entries first; preserve any other top-level keys after."""
+    expected_prefix = list(GLOBAL_KEYS) + ["entries"]
+    root_keys = list(data.keys())
+    if root_keys[: len(expected_prefix)] == expected_prefix:
+        return data
+
+    ordered = CommentedMap()
+    for key in GLOBAL_KEYS:
+        ordered[key] = data.get(key)
+    ordered["entries"] = data.get("entries") or CommentedMap()
+    for key, value in data.items():
+        if key in GLOBAL_KEYS or key == "entries":
+            continue
+        ordered[key] = value
+    return ordered
 
 
 def build_yaml() -> YAML:
@@ -97,11 +169,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(required, or set MEDIA_ROOT)"
         ),
     )
+    course_root_default = os.environ.get("COURSE_ROOT") or str(CWD)
     parser.add_argument(
-        "--www-root",
+        "--course-root",
         type=Path,
-        default=CWD,
-        help=f"Web/document root for this site (default: {CWD})",
+        default=Path(course_root_default),
+        help=(
+            f"Course repository root "
+            f"(default: $COURSE_ROOT or {CWD})"
+        ),
     )
     parser.add_argument(
         "--output",
@@ -131,8 +207,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force-youtube",
         action="store_true",
         help=(
-            "Overwrite existing youtube_id and description from the playlist. "
-            "Without this flag, only null/empty values are filled."
+            "Overwrite existing youtube_id from the playlist, and description "
+            "when no AI whisper/desc file is present. "
+            "Without this flag, only null/empty youtube_id values are filled; "
+            "AI descriptions always refresh when present."
         ),
     )
     return parser.parse_args(argv)
@@ -208,7 +286,18 @@ def load_lessons_media_map(
             title = title.strip()
             if media in title_map:
                 if title_map[media] != title:
-                    title_conflicts.setdefault(media, {title_map[media]}).add(title)
+                    same_base = (
+                        title_without_review_marker(title_map[media])
+                        == title_without_review_marker(title)
+                    )
+                    if same_base:
+                        # Prefer the non-review wording for media.yaml.
+                        if is_review_title(title_map[media]) and not is_review_title(
+                            title
+                        ):
+                            title_map[media] = title
+                    else:
+                        title_conflicts.setdefault(media, {title_map[media]}).add(title)
             else:
                 title_map[media] = title
 
@@ -424,6 +513,39 @@ def as_literal_description(value: Any) -> Any:
     return LiteralScalarString(text)
 
 
+def resolve_whisper_root(args: argparse.Namespace) -> Path | None:
+    value = env_or_none("WHISPER_ROOT")
+    if value:
+        return Path(value)
+    course = getattr(args, "course_root", None)
+    if course is not None:
+        candidate = Path(course) / "whisper"
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def load_ai_description(whisper_root: Path | None, rel_media: str) -> str | None:
+    """Read whisper-desc output: title / tags / description (blank-line separated)."""
+    if whisper_root is None:
+        return None
+    stem = Path(rel_media).with_suffix("").as_posix()
+    path = whisper_root / "desc" / f"{stem}.txt"
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(parts) < 3:
+        return None
+    description = "\n\n".join(parts[2:]).strip()
+    return description or None
+
+
 def load_media_files(files_path: Path) -> list[str]:
     try:
         lines = files_path.read_text(encoding="utf-8").splitlines()
@@ -566,11 +688,22 @@ def probe_duration(ffprobe: str, path: Path) -> int:
         ) from exc
 
 
+def format_duration_text(seconds: int) -> str:
+    """Format seconds as mm:ss, or hh:mm:ss when >= 1 hour."""
+    if seconds < 0:
+        seconds = 0
+    hours, rem = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
 def load_existing(output_path: Path, yaml: YAML) -> CommentedMap:
     if not output_path.exists():
         data = CommentedMap()
-        data["media_root"] = None
-        data["www_root"] = None
+        for key in GLOBAL_KEYS:
+            data[key] = None
         data["entries"] = CommentedMap()
         return data
 
@@ -582,8 +715,8 @@ def load_existing(output_path: Path, yaml: YAML) -> CommentedMap:
 
     if loaded is None:
         data = CommentedMap()
-        data["media_root"] = None
-        data["www_root"] = None
+        for key in GLOBAL_KEYS:
+            data[key] = None
         data["entries"] = CommentedMap()
         return data
 
@@ -635,6 +768,7 @@ def ordered_entry(
     youtube_id: Any = None,
     description: Any = None,
     force_youtube: bool = False,
+    force_description: bool = False,
 ) -> CommentedMap:
     """Update an entry in place so ruamel comments/formatting are preserved."""
     preserved = {key: existing.get(key, None) for key in PRESERVE_KEYS}
@@ -642,7 +776,11 @@ def ordered_entry(
         preserved["youtube_id"], youtube_id, force=force_youtube
     )
     preserved["description"] = as_literal_description(
-        choose_field(preserved["description"], description, force=force_youtube)
+        choose_field(
+            preserved["description"],
+            description,
+            force=force_description or force_youtube,
+        )
     )
     # Always preserve manually set kaltura_id.
     preserved["kaltura_id"] = existing.get("kaltura_id", None)
@@ -650,6 +788,7 @@ def ordered_entry(
     # Ensure known keys exist in the required order by rebuilding only when needed.
     known = [key for key in existing.keys() if key in ENTRY_KEYS]
     needs_reorder = known != list(ENTRY_KEYS)
+    duration_text = format_duration_text(duration)
     if needs_reorder or not existing:
         extras = [(key, value) for key, value in existing.items() if key not in ENTRY_KEYS]
         existing.clear()
@@ -659,6 +798,7 @@ def ordered_entry(
         existing["size"] = size
         existing["md5"] = md5
         existing["duration"] = duration
+        existing["duration_text"] = duration_text
         for key, value in extras:
             existing[key] = value
         existing["description"] = preserved["description"]
@@ -671,6 +811,7 @@ def ordered_entry(
     existing["size"] = size
     existing["md5"] = md5
     existing["duration"] = duration
+    existing["duration_text"] = duration_text
     return existing
 
 
@@ -714,16 +855,18 @@ def main(argv: list[str] | None = None) -> int:
 
     playlist = load_youtube_playlist(args.youtube_playlist)
     by_id, by_title, by_basename = index_youtube_playlist(playlist)
+    whisper_root = resolve_whisper_root(args)
 
     yaml = build_yaml()
     data = load_existing(args.output, yaml)
-    data["media_root"] = str(media_root)
-    data["www_root"] = str(args.www_root)
+    apply_course_globals(data, args)
 
     old_entries = data["entries"]
     updated: dict[str, CommentedMap] = {}
     youtube_matched = 0
     youtube_unmatched: list[str] = []
+    ai_desc_count = 0
+    yt_desc_count = 0
 
     for rel_name in media_files:
         media_path = media_root / rel_name
@@ -753,15 +896,15 @@ def main(argv: list[str] | None = None) -> int:
             by_basename=by_basename,
         )
         youtube_id = None
-        description = None
+        youtube_description = None
         if yt_entry is not None:
             youtube_matched += 1
             youtube_id = yt_entry.get("id")
-            description = yt_entry.get("description")
-            if isinstance(description, str):
-                description = description.strip() or None
+            youtube_description = yt_entry.get("description")
+            if isinstance(youtube_description, str):
+                youtube_description = youtube_description.strip() or None
             else:
-                description = None
+                youtube_description = None
         elif playlist:
             youtube_unmatched.append(rel_name)
             warnings.warn(
@@ -769,6 +912,17 @@ def main(argv: list[str] | None = None) -> int:
                 UserWarning,
                 stacklevel=2,
             )
+
+        ai_description = load_ai_description(whisper_root, rel_name)
+        if ai_description:
+            description = ai_description
+            force_description = True
+            ai_desc_count += 1
+        else:
+            description = youtube_description
+            force_description = False
+            if description:
+                yt_desc_count += 1
 
         updated[rel_name] = ordered_entry(
             existing,
@@ -779,25 +933,12 @@ def main(argv: list[str] | None = None) -> int:
             youtube_id=youtube_id,
             description=description,
             force_youtube=args.force_youtube,
+            force_description=force_description,
         )
 
     new_entries, orphans = rebuild_entries(old_entries, media_files, updated)
     data["entries"] = new_entries
-
-    # Keep media_root / www_root / entries first without rebuilding the root map
-    # when possible so document-level comments survive.
-    root_keys = list(data.keys())
-    expected_prefix = ["media_root", "www_root", "entries"]
-    if root_keys[:3] != expected_prefix:
-        ordered = CommentedMap()
-        ordered["media_root"] = data["media_root"]
-        ordered["www_root"] = data.get("www_root")
-        ordered["entries"] = data["entries"]
-        for key, value in data.items():
-            if key in ("media_root", "www_root", "entries"):
-                continue
-            ordered[key] = value
-        data = ordered
+    data = order_root_map(data)
 
     try:
         with args.output.open("w", encoding="utf-8") as handle:
@@ -806,6 +947,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"Error: cannot write {args.output}: {exc}") from exc
 
     print(f"Wrote {len(media_files)} media entries to {args.output}")
+    print(
+        f"Descriptions: {ai_desc_count} from whisper/desc, "
+        f"{yt_desc_count} from YouTube playlist"
+        + (
+            f" (whisper_root={whisper_root})"
+            if whisper_root is not None
+            else " (no WHISPER_ROOT)"
+        )
+    )
     if playlist:
         print(
             f"YouTube matches: {youtube_matched}/{len(media_files)} "

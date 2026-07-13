@@ -128,10 +128,17 @@ Builds / refreshes `media.yaml` from:
 - `MEDIA_ROOT` (inventory: every `.mov` / `.mp4` / `.m4v`)
 - `lessons.json` (titles and youtube ids when present)
 - `youtube/youtube-playlist.jsonl` (youtube id / description matching)
+- `WHISPER_ROOT/desc/...` (AI descriptions from `whisper-desc`, preferred)
 
-Also records `size`, `md5`, and `duration` from disk. Existing
-`youtube_id` / `description` are filled when empty (`--force-youtube` to
-overwrite). `kaltura_id` is preserved.
+Also records `size`, `md5`, `duration`, and `duration_text` from disk.
+Description priority: AI `whisper/desc` if present, else YouTube playlist
+(empty fields only, unless `--force-youtube`). Existing `youtube_id` is filled
+when empty (`--force-youtube` to overwrite). `kaltura_id` is preserved.
+
+Top-level globals are copied from `media.env` on each run:
+
+`course_root`, `media_root`, `whisper_root`, `youtube_dir`, `youtube_playlist`,
+and `course_hint`.
 
 ## Course layout
 
