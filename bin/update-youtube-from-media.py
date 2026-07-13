@@ -319,6 +319,26 @@ def fetch_snippet(youtube, video_id: str) -> dict[str, Any]:
     return items[0]["snippet"]
 
 
+def is_quota_exceeded(exc: BaseException) -> bool:
+    """True when YouTube Data API reports daily quota exhausted."""
+    text = str(exc).lower()
+    if "quotaexceeded" in text or ("exceeded your" in text and "quota" in text):
+        return True
+    content = getattr(exc, "content", None)
+    if content:
+        blob = (
+            content.decode("utf-8", errors="replace").lower()
+            if isinstance(content, bytes)
+            else str(content).lower()
+        )
+        if "quotaexceeded" in blob or ("quota" in blob and "exceeded" in blob):
+            return True
+    resp = getattr(exc, "resp", None)
+    if resp is not None and getattr(resp, "status", None) == 403 and "quota" in text:
+        return True
+    return False
+
+
 def update_snippet(
     youtube,
     video_id: str,
@@ -374,6 +394,7 @@ def main() -> int:
     updated = 0
     skipped = 0
     errors = 0
+    stopped_for_quota = False
 
     for row in rows:
         if args.limit and would_change >= args.limit:
@@ -393,6 +414,13 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR fetch {video_id} ({row['media']}): {exc}", file=sys.stderr)
             errors += 1
+            if is_quota_exceeded(exc):
+                stopped_for_quota = True
+                print(
+                    "STOP: YouTube API quota exceeded; remaining videos not processed.",
+                    file=sys.stderr,
+                )
+                break
             continue
 
         current_title = (snippet.get("title") or "").strip()
@@ -446,6 +474,13 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  ERROR update: {exc}", file=sys.stderr)
             errors += 1
+            if is_quota_exceeded(exc):
+                stopped_for_quota = True
+                print(
+                    "STOP: YouTube API quota exceeded; remaining videos not processed.",
+                    file=sys.stderr,
+                )
+                break
 
     print()
     print(f"unchanged/skipped: {skipped}")
@@ -454,6 +489,8 @@ def main() -> int:
         print(f"updated:           {updated}")
     else:
         print("dry-run only; re-run with --apply to push changes")
+    if stopped_for_quota:
+        print("stopped:           YouTube API quota exceeded")
     if errors:
         print(f"errors:            {errors}")
         return 1
