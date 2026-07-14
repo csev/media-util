@@ -245,17 +245,30 @@ def fit_youtube_tags(tags: list[str]) -> tuple[list[str], list[str]]:
 
 
 def tags_equal(left: list[str], right: list[str]) -> bool:
-    return [t.casefold() for t in left] == [t.casefold() for t in right]
+    """True when both sides have the same tags ignoring order and case."""
+    return {t.casefold() for t in left} == {t.casefold() for t in right}
+
+
+def normalize_description(text: str) -> str:
+    """Normalize description text for reliable equality checks."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in text.split("\n")]
+    # Drop a single trailing blank line YouTube sometimes round-trips differently.
+    while lines and lines[-1] == "":
+        lines.pop()
+    while lines and lines[0] == "":
+        lines.pop(0)
+    return "\n".join(lines)
 
 
 def prepare_for_youtube(
     title: str, description: str, tags: Any
 ) -> tuple[str, str, list[str], list[str]]:
     notes: list[str] = []
-    cleaned_title = sanitize_youtube_text(title)
-    cleaned_desc = sanitize_youtube_text(description)
+    cleaned_title = sanitize_youtube_text(title).strip()
+    cleaned_desc = normalize_description(sanitize_youtube_text(description))
     cleaned_tags = tags_to_list(tags)
-    if cleaned_title != title or cleaned_desc != description:
+    if cleaned_title != title.strip() or cleaned_desc != normalize_description(description):
         notes.append("stripped HTML/angle-brackets for YouTube")
     title, description = cleaned_title, cleaned_desc
     if len(title) > YOUTUBE_TITLE_MAX:
@@ -264,6 +277,7 @@ def prepare_for_youtube(
     if len(description) > YOUTUBE_DESC_MAX:
         notes.append(f"description truncated {len(description)} -> {YOUTUBE_DESC_MAX}")
         description = description[: YOUTUBE_DESC_MAX - 1].rstrip() + "…"
+        description = normalize_description(description)
     fitted, tag_notes = fit_youtube_tags(cleaned_tags)
     notes.extend(tag_notes)
     return title, description, fitted, notes
@@ -308,15 +322,31 @@ def build_youtube_service(client_secrets: Path, token_path: Path):
 
 
 def fetch_snippet(youtube, video_id: str) -> dict[str, Any]:
-    response = (
-        youtube.videos()
-        .list(part="snippet", id=video_id)
-        .execute()
-    )
-    items = response.get("items") or []
-    if not items:
+    snippets = fetch_snippets(youtube, [video_id])
+    if video_id not in snippets:
         fail(f"YouTube video not found or not accessible: {video_id}")
-    return items[0]["snippet"]
+    return snippets[video_id]
+
+
+def fetch_snippets(youtube, video_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Batch-fetch snippets (up to 50 ids per API call) to save list quota."""
+    out: dict[str, dict[str, Any]] = {}
+    chunk_size = 50
+    for i in range(0, len(video_ids), chunk_size):
+        chunk = video_ids[i : i + chunk_size]
+        if not chunk:
+            continue
+        response = (
+            youtube.videos()
+            .list(part="snippet", id=",".join(chunk))
+            .execute()
+        )
+        for item in response.get("items") or []:
+            vid = item.get("id")
+            snippet = item.get("snippet")
+            if isinstance(vid, str) and isinstance(snippet, dict):
+                out[vid] = snippet
+    return out
 
 
 def is_quota_exceeded(exc: BaseException) -> bool:
@@ -396,6 +426,24 @@ def main() -> int:
     errors = 0
     stopped_for_quota = False
 
+    video_ids = [row["youtube_id"] for row in rows]
+    try:
+        snippets_by_id = fetch_snippets(youtube, video_ids)
+        print(
+            f"Fetched snippets: {len(snippets_by_id)}/{len(video_ids)} "
+            f"({(len(video_ids) + 49) // 50} list request(s))"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR fetching YouTube snippets: {exc}", file=sys.stderr)
+        if is_quota_exceeded(exc):
+            print(
+                "STOP: YouTube API quota exceeded; remaining videos not processed.",
+                file=sys.stderr,
+            )
+            print("stopped:           YouTube API quota exceeded")
+            return 1
+        return 1
+
     for row in rows:
         if args.limit and would_change >= args.limit:
             break
@@ -407,24 +455,18 @@ def main() -> int:
         # Only push tags when media.yaml has some; otherwise preserve YouTube tags.
         push_tags = wanted_tags if wanted_tags else None
 
-        try:
-            snippet = fetch_snippet(youtube, video_id)
-        except SystemExit:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            print(f"ERROR fetch {video_id} ({row['media']}): {exc}", file=sys.stderr)
+        snippet = snippets_by_id.get(video_id)
+        if snippet is None:
+            print(
+                f"ERROR fetch {video_id} ({row['media']}): "
+                "video not found or not accessible",
+                file=sys.stderr,
+            )
             errors += 1
-            if is_quota_exceeded(exc):
-                stopped_for_quota = True
-                print(
-                    "STOP: YouTube API quota exceeded; remaining videos not processed.",
-                    file=sys.stderr,
-                )
-                break
             continue
 
         current_title = (snippet.get("title") or "").strip()
-        current_desc = (snippet.get("description") or "").strip("\n")
+        current_desc = normalize_description(snippet.get("description") or "")
         current_tags = tags_to_list(snippet.get("tags") or [])
         title_same = current_title == wanted_title
         desc_same = current_desc == wanted_desc

@@ -6,6 +6,45 @@ Shared tooling for lecture media across teaching sites (DJ4E, PY4E, CC4E, etc.).
 Course-specific data (playlist dumps, vocabulary, `lessons.json`, `media.yaml`)
 stays in each course repository. Shared scripts live here.
 
+## Quick reference
+
+Always start with:
+
+```bash
+source /Users/csev/htdocs/dj4e/media.env
+cd /Users/csev/htdocs/dj4e
+```
+
+| I want to… | Command |
+|---|---|
+| Dump YouTube playlist | `dump-youtube-playlist.sh` |
+| Diff lessons ↔ MEDIA_ROOT | `compare-lessons-root.py` |
+| Diff lessons ↔ media.yaml | `compare-lessons.py` |
+| Diff lessons ↔ playlist JSONL | `compare-lessons-youtube.py` |
+| Diff media.yaml ↔ MEDIA_ROOT | `compare-media-root.py` |
+| Diff media.yaml ↔ playlist | `compare-youtube.py` |
+| Clean orphan whisper files | `compare-whisper-root.py` / `--remove` |
+| Transcribe all media | `whisper-media.sh` |
+| Transcribe lessons only | `whisper-lessons` |
+| Clean transcript mis-hears | `whisper-cleanup.py` |
+| Generate AI title/tags/desc | `whisper-desc` |
+| Rebuild media.yaml | `bootstrap-media-yaml.py` |
+| Sync titles → lessons.json | `sync-lessons-titles-from-media.py` |
+| Test YouTube OAuth | `test-youtube-oauth.py` |
+| YouTube dry-run | `update-youtube-from-media.py` |
+| YouTube apply | `update-youtube-from-media.py --apply` |
+| YouTube apply one change | `update-youtube-from-media.py --apply --limit 1` |
+| YouTube apply one video | `update-youtube-from-media.py --apply --only VIDEO_ID` |
+
+Typical publish loop after transcriptions / desc exist:
+
+```bash
+bootstrap-media-yaml.py
+sync-lessons-titles-from-media.py
+update-youtube-from-media.py              # dry-run
+update-youtube-from-media.py --apply      # write
+```
+
 ## Prerequisites
 
 See [INSTALL.md](INSTALL.md) for Mac install steps for:
