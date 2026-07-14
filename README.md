@@ -18,23 +18,26 @@ cd /Users/csev/htdocs/dj4e
 | I want to… | Command |
 |---|---|
 | Dump YouTube playlist | `dump-youtube-playlist.sh` |
-| Diff lessons ↔ MEDIA_ROOT | `compare-lessons-root.py` |
-| Diff lessons ↔ media.yaml | `compare-lessons.py` |
 | Diff lessons ↔ playlist JSONL | `compare-lessons-youtube.py` |
-| Diff media.yaml ↔ MEDIA_ROOT | `compare-media-root.py` |
-| Diff media.yaml ↔ playlist | `compare-youtube.py` |
-| Clean orphan whisper files | `compare-whisper-root.py` / `--remove` |
-| Transcribe all media | `whisper-media.sh` |
+| Diff lessons ↔ MEDIA_ROOT | `compare-lessons-root.py` |
+| Generate vocabulary file | `tar cfv lectures.tar lectures` then use ChatGPT |
 | Transcribe lessons only | `whisper-lessons` |
+| Generate substitutions | `tar cfv whisper.tar whisper` then use ChatGPT |
 | Clean transcript mis-hears | `whisper-cleanup.py` |
-| Generate AI title/tags/desc | `whisper-desc` |
-| Rebuild media.yaml | `bootstrap-media-yaml.py` |
+| Generate AI title/tags/desc | `whisper-desc` (requires `ollama serve`) |
 | Sync titles → lessons.json | `sync-lessons-titles-from-media.py` |
+| Build/Rebuild media.yaml | `bootstrap-media-yaml.py` |
 | Test YouTube OAuth | `test-youtube-oauth.py` |
 | YouTube dry-run | `update-youtube-from-media.py` |
 | YouTube apply | `update-youtube-from-media.py --apply` |
 | YouTube apply one change | `update-youtube-from-media.py --apply --limit 1` |
 | YouTube apply one video | `update-youtube-from-media.py --apply --only VIDEO_ID` |
+| Maintenance | |
+| Diff lessons ↔ media.yaml | `compare-lessons.py` |
+| Diff media.yaml ↔ MEDIA_ROOT | `compare-media-root.py` |
+| Diff media.yaml ↔ playlist | `compare-youtube.py` |
+| Clean orphan whisper files | `compare-whisper-root.py` / `--remove` |
+| Transcribe all media | `whisper-media.sh` |
 
 Typical publish loop after transcriptions / desc exist:
 
