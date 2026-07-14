@@ -7,8 +7,9 @@ By default the inventory is scanned from MEDIA_ROOT / --media-root
 Descriptions prefer WHISPER_ROOT/desc (whisper-desc) when present, else the
 YouTube playlist description. Titles are composed as
 ``DJ nn.mm <AI title> (duration)`` from lessons.json + whisper/desc.
-Preserves manually edited youtube_id / kaltura_id on rerun via ruamel.yaml
-(AI descriptions refresh whenever the desc file exists).
+Course EXTRA_TAGS / EXTRA_DESCRIPTION from media.env are appended onto each
+entry's tags/description. Preserves manually edited youtube_id / kaltura_id
+on rerun via ruamel.yaml (AI descriptions refresh whenever the desc file exists).
 """
 
 from __future__ import annotations
@@ -59,6 +60,8 @@ GLOBAL_KEYS = (
     "youtube_dir",
     "youtube_playlist",
     "course_hint",
+    "extra_tags",
+    "extra_description",
 )
 
 REVIEW_MARKER_RE = re.compile(r"Review:|\(\s*review\s*\)", re.IGNORECASE)
@@ -109,6 +112,8 @@ def apply_course_globals(data: CommentedMap, args: argparse.Namespace) -> None:
     data["youtube_dir"] = env_or_none("YOUTUBE_DIR")
     data["youtube_playlist"] = env_or_none("YOUTUBE_PLAYLIST")
     data["course_hint"] = env_or_none("COURSE_HINT")
+    data["extra_tags"] = env_or_none("EXTRA_TAGS")
+    data["extra_description"] = env_or_none("EXTRA_DESCRIPTION")
     # Drop legacy www_root if present from older media.yaml files.
     if "www_root" in data:
         del data["www_root"]
@@ -562,6 +567,41 @@ def normalize_tags(value: Any) -> str | None:
         return None
     cleaned = sanitize_youtube_tags(text)
     return cleaned or None
+
+
+def merge_extra_tags(tags: str | None, extra_tags: str | None) -> str | None:
+    """Append course EXTRA_TAGS onto an entry tag string (deduped)."""
+    extras = normalize_tags(extra_tags)
+    if not extras:
+        return tags
+    base_parts = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    seen = {t.casefold() for t in base_parts}
+    for tag in extras.split(","):
+        tag = tag.strip()
+        if not tag:
+            continue
+        if tag.casefold() in seen:
+            continue
+        base_parts.append(tag)
+        seen.add(tag.casefold())
+    return ", ".join(base_parts) if base_parts else None
+
+
+def merge_extra_description(
+    description: str | None, extra_description: str | None
+) -> str | None:
+    """Append course EXTRA_DESCRIPTION onto an entry description if missing."""
+    if not extra_description or not str(extra_description).strip():
+        return description
+    extra = sanitize_youtube_text(str(extra_description).strip())
+    if not extra:
+        return description
+    body = (description or "").rstrip()
+    if body and extra.casefold() in body.casefold():
+        return description
+    if body:
+        return f"{body}\n\n{extra}"
+    return extra
 
 
 def load_ai_metadata(
@@ -1057,6 +1097,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             tags = None
             force_tags = False
+
+        extra_tags = env_or_none("EXTRA_TAGS")
+        extra_description = env_or_none("EXTRA_DESCRIPTION")
+        merged_tags = merge_extra_tags(tags, extra_tags)
+        if extra_tags and merged_tags != tags:
+            tags = merged_tags
+            force_tags = True
+        elif merged_tags:
+            tags = merged_tags
+
+        merged_description = merge_extra_description(description, extra_description)
+        if extra_description and merged_description != description:
+            description = merged_description
+            force_description = True
 
         duration = probe_duration(ffprobe, media_path)
         title = compose_media_title(lesson_title, ai_title, duration)
