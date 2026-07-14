@@ -159,8 +159,11 @@ update-youtube-from-media.py --apply
 ```
 
 `test-youtube-oauth.py` opens a browser on first run, caches the token at
-`$YOUTUBE_DIR/youtube-oauth-token.json`, and verifies a read-only API call.
-Use `--reauth` to force a new consent.
+`$YOUTUBE_DIR/youtube-oauth-token.json`, and verifies API access with the same
+scope used by the updater. Use `--reauth` to force a new consent.
+
+`update-youtube-from-media.py` pushes titles, descriptions, and tags from
+`media.yaml`, and stops immediately if the YouTube API quota is exceeded.
 ## Quick check
 
 ```bash
