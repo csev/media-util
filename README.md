@@ -31,6 +31,8 @@ cd /Users/csev/htdocs/dj4e
 At this point `media.yaml` is the course of truth.   We can get the titles,
 descriptions, and tags uploaded into the YouTube playlist.
 
+| I want to… | Command |
+|---|---|
 | Test YouTube OAuth | `test-youtube-oauth.py` |
 | YouTube apply | `update-youtube-from-media-yaml.py --apply` |
 | YouTube apply one change | `update-youtube-from-media-yaml.py --apply --limit 1` |
@@ -40,20 +42,13 @@ Once things are all in sync or things are updated, we can check for drift betwee
 the media folder, transcriptions in `whisper`, `lessons.json`, `media.yaml`,
 and YouTube as things get edited independently.
 
-| Dump YouTube playlist | `dump-youtube-playlist.sh` |
+| I want to… | Command |
+|---|---|
+| Download latest YouTube playlist | `dump-youtube-playlist.sh` |
 | Diff lessons ↔ media.yaml | `compare-lessons.py` |
 | Diff media.yaml ↔ MEDIA_ROOT | `compare-media-root.py` |
 | Diff media.yaml ↔ playlist | `compare-youtube.py` |
 | Clean orphan whisper files | `compare-whisper-root.py` / `--remove` |
-
-Typical publish loop after transcriptions / desc exist:
-
-```bash
-bootstrap-media-yaml.py
-update-lessons-from-media-yaml.py
-update-youtube-from-media-yaml.py              # dry-run
-update-youtube-from-media-yaml.py --apply      # write
-```
 
 ## Prerequisites
 
