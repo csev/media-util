@@ -30,6 +30,7 @@ link_one() {
     echo "LINK $dst -> $src"
 }
 
+link_one media-help
 link_one whisper-desc
 link_one whisper-cleanup.py
 link_one whisper-folder.sh

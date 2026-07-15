@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Print common media-util commands. Source the course media.env first.
+#
+# Usage: media-help
+
+cat <<'EOF'
+media-util — common commands
+============================
+
+Always start with (example: DJ4E):
+
+  source /path/to/course/media.env
+  cd /path/to/course
+
+Build / refresh
+---------------
+  dump-youtube-playlist.sh              Dump YouTube playlist → youtube-playlist.jsonl
+  compare-lessons-youtube.py            Diff lessons.json ↔ playlist JSONL
+  compare-lessons-root.py               Diff lessons.json ↔ MEDIA_ROOT
+  whisper-lessons                       Transcribe media listed in lessons.json
+  whisper-media.sh                      Transcribe all media under MEDIA_ROOT
+                                        (skips top-level archive/)
+  whisper-cleanup.py                    Apply *whisper-replacements* to txt/vtt/srt
+  whisper-desc                          AI title/tags/desc via Ollama (ollama serve)
+  bootstrap-media-yaml.py               Build/refresh media.yaml
+  update-lessons-from-media-yaml.py     Copy media.yaml titles → lessons.json
+
+After media.yaml is the source of truth — push to YouTube
+----------------------------------------------------------
+  test-youtube-oauth.py                 Smoke-test OAuth
+  update-youtube-from-media-yaml.py                Dry-run
+  update-youtube-from-media-yaml.py --apply        Apply all
+  update-youtube-from-media-yaml.py --apply --only-playlist
+  update-youtube-from-media-yaml.py --apply --limit 1
+  update-youtube-from-media-yaml.py --apply --only VIDEO_ID
+
+Check for drift
+---------------
+  dump-youtube-playlist.sh              Refresh playlist dump first
+  compare-lessons.py                    Diff lessons.json ↔ media.yaml
+  compare-media-root.py                 Diff MEDIA_ROOT ↔ media.yaml
+  compare-youtube.py                    Diff media.yaml ↔ playlist
+  compare-whisper-root.py               Orphan whisper artifacts
+  compare-whisper-root.py --remove      Delete orphan whisper artifacts
+
+One-off / local
+---------------
+  whisper-one.sh FILE                   Transcribe a single file (next to itself)
+  whisper-folder.sh                     Transcribe top-level media in cwd
+
+Docs: $MEDIA_UTIL/README.md  (or ../media-util/README.md next to the course)
+EOF

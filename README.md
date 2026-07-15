@@ -8,6 +8,12 @@ stays in each course repository. Shared scripts live here.
 
 ## Quick reference
 
+Print this cheat sheet anytime (after `media.env` is on `PATH`):
+
+```bash
+media-help
+```
+
 Always start with:
 
 ```bash
@@ -298,6 +304,7 @@ Media binaries usually live outside the www tree, for example:
 
 | Command | Purpose |
 |---|---|
+| `media-help` | Dump common commands cheat sheet |
 | `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
 | `test-youtube-oauth.py` | Smoke-test OAuth client + YouTube API access |
 | `update-youtube-from-media-yaml.py` | Push `media.yaml` titles, descriptions, and tags to YouTube |
