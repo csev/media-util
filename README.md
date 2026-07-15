@@ -26,18 +26,25 @@ cd /Users/csev/htdocs/dj4e
 | Clean transcript mis-hears | `whisper-cleanup.py` |
 | Generate AI title/tags/desc | `whisper-desc` (requires `ollama serve`) |
 | Build/Rebuild media.yaml (reads whisper) | `bootstrap-media-yaml.py` |
-| Once media.yaml is the source of truth... | |
 | Update titles → lessons.json | `update-lessons-from-media-yaml.py` |
+
+At this point `media.yaml` is the course of truth.   We can get the titles,
+descriptions, and tags uploaded into the YouTube playlist.
+
 | Test YouTube OAuth | `test-youtube-oauth.py` |
 | YouTube apply | `update-youtube-from-media-yaml.py --apply` |
 | YouTube apply one change | `update-youtube-from-media-yaml.py --apply --limit 1` |
 | YouTube apply one video | `update-youtube-from-media-yaml.py --apply --only VIDEO_ID` |
-| Maintenance / Checking | |
+
+Once things are all in sync or things are updated, we can check for drift between
+the media folder, transcriptions in `whisper`, `lessons.json`, `media.yaml`,
+and YouTube as things get edited independently.
+
+| Dump YouTube playlist | `dump-youtube-playlist.sh` |
 | Diff lessons ↔ media.yaml | `compare-lessons.py` |
 | Diff media.yaml ↔ MEDIA_ROOT | `compare-media-root.py` |
 | Diff media.yaml ↔ playlist | `compare-youtube.py` |
 | Clean orphan whisper files | `compare-whisper-root.py` / `--remove` |
-| Transcribe all media | `whisper-media.sh` |
 
 Typical publish loop after transcriptions / desc exist:
 
