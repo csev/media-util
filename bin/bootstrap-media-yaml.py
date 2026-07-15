@@ -6,11 +6,14 @@ By default the inventory is scanned from MEDIA_ROOT / --media-root
 
 Descriptions prefer WHISPER_ROOT/desc (whisper-desc) when present, else the
 YouTube playlist description. Titles are composed as
-``DJ nn.mm <AI title> (duration)`` from lessons.json + whisper/desc.
-Course EXTRA_TAGS / EXTRA_DESCRIPTION from media.env are appended onto each
-entry's tags/description. youtube_id prefers a playlist match, then the
-lessons.json youtube id for the same media path (even when unlisted / not on
-the playlist), and preserves a media.yaml youtube_id that is already on the
+``[<TITLE_PREFIX> [nn.mm] ]<AI title> (duration)`` from lessons.json +
+whisper/desc (``TITLE_PREFIX`` from media.env; empty means no course prefix —
+CC4E style). The composed lessons-based string is stored as ``title``; the
+AI wording (when present) is stored separately as ``ai_title``. Course
+EXTRA_TAGS / EXTRA_DESCRIPTION from media.env are appended
+onto each entry's tags/description. youtube_id prefers a playlist match, then
+the lessons.json youtube id for the same media path (even when unlisted / not
+on the playlist), and preserves a media.yaml youtube_id that is already on the
 playlist. kaltura_id is preserved on rerun via ruamel.yaml (AI descriptions
 refresh whenever the desc file exists).
 """
@@ -43,6 +46,7 @@ CWD = Path.cwd()
 
 ENTRY_KEYS = (
     "title",
+    "ai_title",
     "youtube_id",
     "kaltura_id",
     "size",
@@ -53,7 +57,7 @@ ENTRY_KEYS = (
     "description",
 )
 
-PRESERVE_KEYS = ("description", "youtube_id", "kaltura_id")
+PRESERVE_KEYS = ("description", "youtube_id", "kaltura_id", "ai_title")
 
 # Top-level media.yaml keys mirrored from media.env.
 GLOBAL_KEYS = (
@@ -63,13 +67,27 @@ GLOBAL_KEYS = (
     "youtube_dir",
     "youtube_playlist",
     "course_hint",
+    "title_prefix",
     "extra_tags",
     "extra_description",
 )
 
 REVIEW_MARKER_RE = re.compile(r"Review:|\(\s*review\s*\)", re.IGNORECASE)
-DJ_PREFIX_RE = re.compile(r"^(DJ\s+\d+\.\d+)\b", re.IGNORECASE)
+# Numbered course prefixes like "DJ 01.01" (token comes from TITLE_PREFIX).
 TRAILING_DURATION_RE = re.compile(r"\s*\((?:\d+:)+\d+\)\s*$")
+
+
+def title_prefix_token() -> str:
+    """Course title prefix token from media.env (e.g. ``DJ``). Empty = none."""
+    return (os.environ.get("TITLE_PREFIX") or "").strip()
+
+
+def numbered_prefix_re(token: str | None = None) -> re.Pattern[str] | None:
+    """Match ``TOKEN nn.mm`` at the start of a title, if TOKEN is set."""
+    token = (token if token is not None else title_prefix_token()).strip()
+    if not token:
+        return None
+    return re.compile(rf"^({re.escape(token)}\s+\d+\.\d+)\b", re.IGNORECASE)
 
 
 def is_review_title(title: str) -> bool:
@@ -88,12 +106,22 @@ def title_without_review_marker(title: str) -> str:
     """Strip Review: / (review) markers for lessons.json conflict comparison."""
     text = title.strip()
     text = re.sub(r"^Review:\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(
-        r"^(DJ\s+\d+\.\d+)\s+Review:\s*",
-        r"\1 ",
-        text,
-        flags=re.IGNORECASE,
-    )
+    token = title_prefix_token()
+    if token:
+        text = re.sub(
+            rf"^({re.escape(token)}\s+\d+\.\d+)\s+Review:\s*",
+            r"\1 ",
+            text,
+            flags=re.IGNORECASE,
+        )
+    else:
+        # Still recognize legacy "DJ nn.mm Review:" when no prefix is configured.
+        text = re.sub(
+            r"^(DJ\s+\d+\.\d+)\s+Review:\s*",
+            r"\1 ",
+            text,
+            flags=re.IGNORECASE,
+        )
     text = re.sub(r"\(\s*review\s*\)", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -115,6 +143,7 @@ def apply_course_globals(data: CommentedMap, args: argparse.Namespace) -> None:
     data["youtube_dir"] = env_or_none("YOUTUBE_DIR")
     data["youtube_playlist"] = env_or_none("YOUTUBE_PLAYLIST")
     data["course_hint"] = env_or_none("COURSE_HINT")
+    data["title_prefix"] = title_prefix_token() or None
     data["extra_tags"] = env_or_none("EXTRA_TAGS")
     data["extra_description"] = env_or_none("EXTRA_DESCRIPTION")
     # Drop legacy www_root if present from older media.yaml files.
@@ -373,9 +402,21 @@ def load_lessons_media_map(
 
 
 def normalize_title(title: str) -> str:
-    """Normalize titles for comparison (drop DJ nn.mm prefix and trailing times)."""
+    """Normalize titles for comparison (drop course prefix and trailing times)."""
     text = title.strip()
-    text = re.sub(r"^DJ\s+\d+\.\d+\s+", "", text, flags=re.IGNORECASE)
+    token = title_prefix_token()
+    if token:
+        text = re.sub(
+            rf"^{re.escape(token)}\s+\d+\.\d+\s+",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(rf"^{re.escape(token)}\s+", "", text, flags=re.IGNORECASE)
+    else:
+        # Also drop legacy bare / numbered DJ when no prefix is configured.
+        text = re.sub(r"^DJ\s+\d+\.\d+\s+", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^DJ\s+", "", text, flags=re.IGNORECASE)
     while True:
         match = re.search(r"\s*\((\d{1,2}:\d{2}|\d+\.\d{2})\)\s*$", text)
         if not match:
@@ -720,15 +761,28 @@ def format_title_duration(seconds: int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def extract_dj_prefix(title: str) -> str | None:
-    match = DJ_PREFIX_RE.match(title.strip())
+def extract_title_prefix(title: str) -> str | None:
+    """Return numbered prefix (e.g. ``DJ 01.01``) from a lessons title, if any."""
+    token = title_prefix_token()
+    pattern = numbered_prefix_re(token)
+    if pattern is None:
+        return None
+    match = pattern.match(title.strip())
     return match.group(1) if match else None
 
 
 def clean_title_body(text: str) -> str:
-    """Strip DJ prefix, Review marker, and trailing (duration) from a title body."""
+    """Strip course prefix, Review marker, and trailing (duration) from a title body."""
     body = text.strip()
-    body = DJ_PREFIX_RE.sub("", body).strip()
+    token = title_prefix_token()
+    pattern = numbered_prefix_re(token)
+    if pattern is not None:
+        body = pattern.sub("", body).strip()
+        body = re.sub(rf"^{re.escape(token)}\b\s*", "", body, flags=re.IGNORECASE).strip()
+    else:
+        # Drop leftover DJ prefixes when TITLE_PREFIX is empty (e.g. CC4E).
+        body = re.sub(r"^DJ\s+\d+\.\d+\s+", "", body, flags=re.IGNORECASE).strip()
+        body = re.sub(r"^DJ\b\s*", "", body, flags=re.IGNORECASE).strip()
     body = re.sub(r"^Review:\s*", "", body, flags=re.IGNORECASE).strip()
     body = re.sub(r"\(\s*review\s*\)", "", body, flags=re.IGNORECASE).strip()
     body = TRAILING_DURATION_RE.sub("", body).strip()
@@ -741,17 +795,25 @@ def compose_media_title(
     ai_title: str | None,
     duration_seconds: int,
 ) -> str:
-    """Build ``DJ nn.mm <AI title> (duration)`` (no Review: — lessons.json only)."""
-    prefix = extract_dj_prefix(lesson_title)
-    if not prefix:
-        prefix = "DJ"
+    """Build ``[<TITLE_PREFIX> [nn.mm] ]<AI title> (duration)``.
+
+    When ``TITLE_PREFIX`` is set (e.g. ``DJ``), prefer a numbered prefix from
+    the lessons title (``DJ 01.01``), else the bare token. When ``TITLE_PREFIX``
+    is empty, omit any course prefix (CC4E style).
+    """
+    token = title_prefix_token()
+    prefix = extract_title_prefix(lesson_title) if token else None
+    if token and not prefix:
+        prefix = token
     body = clean_title_body(ai_title) if ai_title else ""
     if not body:
         body = clean_title_body(lesson_title)
     if not body:
         body = "Untitled"
     duration = format_title_duration(duration_seconds)
-    return sanitize_youtube_text(f"{prefix} {body} ({duration})")
+    if prefix:
+        return sanitize_youtube_text(f"{prefix} {body} ({duration})")
+    return sanitize_youtube_text(f"{body} ({duration})")
 
 
 def load_media_files(files_path: Path) -> list[str]:
@@ -980,6 +1042,7 @@ def ordered_entry(
     existing: CommentedMap,
     *,
     title: str,
+    ai_title: Any = None,
     size: int,
     md5: str,
     duration: int,
@@ -989,14 +1052,22 @@ def ordered_entry(
     force_youtube: bool = False,
     force_description: bool = False,
     force_tags: bool = False,
+    force_ai_title: bool = False,
 ) -> CommentedMap:
     """Update an entry in place so ruamel comments/formatting are preserved.
 
     ``youtube_id`` is expected to already be resolved by the caller
     (playlist, then lessons.json, then existing).
+
+    ``title`` is the course-facing title (typically from lessons.json).
+    ``ai_title`` records the AI-generated title for later comparison; it is
+    preserved on rerun unless a new AI title is supplied (or ``force_ai_title``).
     """
     preserved = {key: existing.get(key, None) for key in PRESERVE_KEYS}
     preserved["youtube_id"] = youtube_id
+    preserved["ai_title"] = choose_field(
+        preserved["ai_title"], ai_title, force=force_ai_title
+    )
     preserved["description"] = as_literal_description(
         choose_field(
             preserved["description"],
@@ -1026,6 +1097,7 @@ def ordered_entry(
         ]
         existing.clear()
         existing["title"] = title
+        existing["ai_title"] = preserved["ai_title"]
         existing["youtube_id"] = preserved["youtube_id"]
         existing["kaltura_id"] = preserved["kaltura_id"]
         existing["size"] = size
@@ -1039,6 +1111,7 @@ def ordered_entry(
         return existing
 
     existing["title"] = title
+    existing["ai_title"] = preserved["ai_title"]
     existing["youtube_id"] = preserved["youtube_id"]
     existing["kaltura_id"] = preserved["kaltura_id"]
     existing["description"] = preserved["description"]
@@ -1200,11 +1273,19 @@ def main(argv: list[str] | None = None) -> int:
             force_description = True
 
         duration = probe_duration(ffprobe, media_path)
-        title = compose_media_title(lesson_title, ai_title, duration)
+        # Course-facing title comes from lessons.json (plus optional TITLE_PREFIX).
+        title = compose_media_title(lesson_title, None, duration)
+        # Keep AI wording separately for later comparison / editing.
+        composed_ai_title = None
+        force_ai_title = False
+        if ai_title:
+            composed_ai_title = compose_media_title(lesson_title, ai_title, duration)
+            force_ai_title = True
 
         updated[rel_name] = ordered_entry(
             existing,
             title=title,
+            ai_title=composed_ai_title,
             size=media_path.stat().st_size,
             md5=file_md5(media_path),
             duration=duration,
@@ -1214,6 +1295,7 @@ def main(argv: list[str] | None = None) -> int:
             force_youtube=args.force_youtube,
             force_description=force_description,
             force_tags=force_tags,
+            force_ai_title=force_ai_title,
         )
 
     new_entries, orphans = rebuild_entries(old_entries, media_files, updated)

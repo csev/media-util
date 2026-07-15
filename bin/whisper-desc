@@ -55,6 +55,7 @@ Requirements:
   When naming HTML/XML elements, write them in backticks without brackets,
   e.g. `html`, `head`, `body`, `a` — never <html> or </body>.
 - Tags should be relevant technical keywords, comma-separated.
+- Each tag must be at least 3 characters (never single-letter tags like C or B).
 - Description must be exactly two paragraphs; each paragraph may be a few sentences covering the main points of the lecture.
 - Return only the TITLE, TAGS, and DESCRIPTION sections — no other commentary.
 

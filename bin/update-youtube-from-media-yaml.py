@@ -169,6 +169,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Update even when title/description/tags already match",
     )
+    parser.add_argument(
+        "--force-tags",
+        action="store_true",
+        help=(
+            "Push tags even when title/description already match and the "
+            "API returns no tags (videos.list often omits tags even when "
+            "they are set; without this flag those tag-only retries are skipped)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -267,7 +276,12 @@ def filter_playlist_rows(
 
 
 def tags_to_list(value: Any) -> list[str]:
-    """Convert media.yaml tags (comma string or list) to a sanitized list."""
+    """Convert media.yaml / YouTube tags to a sanitized list.
+
+    Drops empty tags and tags shorter than MIN_YOUTUBE_TAG_LEN (used for both
+    upload and comparison so YouTube's silent drops of ``C`` / ``B`` do not
+    cause endless re-uploads).
+    """
     if value is None:
         return []
     if isinstance(value, str):
@@ -284,11 +298,14 @@ def tags_to_list(value: Any) -> list[str]:
         cleaned = sanitize_youtube_tags(item)
         if not cleaned:
             continue
-        key = cleaned.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        tags.append(cleaned)
+        # sanitize_youtube_tags may return multiple if a comma sneaks in;
+        # keep single tokens.
+        for part in [p.strip() for p in cleaned.split(",") if p.strip()]:
+            key = part.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            tags.append(part)
     return tags
 
 
@@ -337,6 +354,15 @@ def prepare_for_youtube(
     cleaned_title = sanitize_youtube_text(title).strip()
     cleaned_desc = normalize_description(sanitize_youtube_text(description))
     cleaned_tags = tags_to_list(tags)
+    raw_count = 0
+    if isinstance(tags, str):
+        raw_count = len([p for p in tags.split(",") if p.strip()])
+    elif isinstance(tags, list):
+        raw_count = len([str(p).strip() for p in tags if str(p).strip()])
+    if raw_count and len(cleaned_tags) < raw_count:
+        notes.append(
+            f"dropped {raw_count - len(cleaned_tags)} tag(s) shorter than 3 characters"
+        )
     if cleaned_title != title.strip() or cleaned_desc != normalize_description(description):
         notes.append("stripped HTML/angle-brackets for YouTube")
     title, description = cleaned_title, cleaned_desc
@@ -446,7 +472,7 @@ def update_snippet(
     description: str,
     tags: list[str] | None,
     snippet: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     body = {
         "id": video_id,
         "snippet": {
@@ -458,18 +484,16 @@ def update_snippet(
     if tags is not None:
         body["snippet"]["tags"] = tags
     elif "tags" in snippet and isinstance(snippet["tags"], list):
-        # No media.yaml tags — keep existing YouTube tags (sanitized).
-        body["snippet"]["tags"] = [
-            sanitize_youtube_tags(str(tag))
-            for tag in snippet["tags"]
-            if str(tag).strip()
-        ]
+        # No media.yaml tags — keep existing YouTube tags (sanitized / min length).
+        kept = tags_to_list(snippet["tags"])
+        if kept:
+            body["snippet"]["tags"] = kept
     if "defaultLanguage" in snippet:
         body["snippet"]["defaultLanguage"] = snippet["defaultLanguage"]
     if "defaultAudioLanguage" in snippet:
         body["snippet"]["defaultAudioLanguage"] = snippet["defaultAudioLanguage"]
 
-    youtube.videos().update(part="snippet", body=body).execute()
+    return youtube.videos().update(part="snippet", body=body).execute()
 
 
 def main() -> int:
@@ -504,6 +528,7 @@ def main() -> int:
     would_change = 0
     updated = 0
     skipped = 0
+    skipped_invisible_tags = 0
     errors = 0
     stopped_for_quota = False
 
@@ -552,9 +577,24 @@ def main() -> int:
         title_same = current_title == wanted_title
         desc_same = current_desc == wanted_desc
         tags_same = True if push_tags is None else tags_equal(current_tags, push_tags)
+        tags_api_blank = bool(push_tags) and not current_tags
+        # videos.list often omits tags even when they are set on the video
+        # (confirmed via public scrape). Avoid endless tag-only re-uploads.
+        skip_invisible_tags = False
+        if (
+            tags_api_blank
+            and title_same
+            and desc_same
+            and not args.force
+            and not args.force_tags
+        ):
+            tags_same = True
+            skip_invisible_tags = True
 
         if title_same and desc_same and tags_same and not args.force:
             skipped += 1
+            if skip_invisible_tags:
+                skipped_invisible_tags += 1
             continue
 
         would_change += 1
@@ -573,16 +613,21 @@ def main() -> int:
             print(f"  description:")
             print(f"    was: {was_preview}{'…' if len(current_desc) > 120 else ''}")
             print(f"    now: {now_preview}{'…' if len(wanted_desc) > 120 else ''}")
-        if push_tags is not None and (not tags_same or args.force):
+        if push_tags is not None and (not tags_same or args.force or args.force_tags):
             print(f"  tags:")
             print(f"    was: {', '.join(current_tags) or '(none)'}")
             print(f"    now: {', '.join(push_tags)}")
+            if tags_api_blank and (title_same and desc_same):
+                print(
+                    "  NOTE: videos.list returned no tags; "
+                    "pushing because --force-tags (or title/description also changing)"
+                )
 
         if not args.apply:
             continue
 
         try:
-            update_snippet(
+            response = update_snippet(
                 youtube,
                 video_id,
                 title=wanted_title,
@@ -591,6 +636,15 @@ def main() -> int:
                 snippet=snippet,
             )
             print("  UPDATED")
+            if push_tags is not None:
+                resp_tags = tags_to_list(
+                    (response.get("snippet") or {}).get("tags") or []
+                )
+                if not resp_tags:
+                    print(
+                        "  NOTE: update response also had no tags "
+                        "(API often omits them; check YouTube Studio / public page)"
+                    )
             updated += 1
             if args.sleep > 0:
                 time.sleep(args.sleep)
@@ -607,6 +661,11 @@ def main() -> int:
 
     print()
     print(f"unchanged/skipped: {skipped}")
+    if skipped_invisible_tags:
+        print(
+            f"  (of those, {skipped_invisible_tags} had matching title/description "
+            "but API returned no tags — not re-pushed; use --force-tags to retry)"
+        )
     print(f"would change:      {would_change}")
     if args.apply:
         print(f"updated:           {updated}")

@@ -86,6 +86,7 @@ export WHISPER_ROOT=/Users/csev/htdocs/dj4e/whisper
 export YOUTUBE_DIR=/Users/csev/htdocs/dj4e/youtube
 export YOUTUBE_PLAYLIST='https://www.youtube.com/playlist?list=PLlRFEj9H3Oj5e-EH0t3kXrcdygrL9-u-Z'
 export COURSE_HINT='Django for Everybody, DJ4E, Django, Python, web development, Dr. Chuck, Chuck Severance'
+export TITLE_PREFIX='DJ'
 export EXTRA_TAGS='dj4e, dj4e-lecture'
 export EXTRA_DESCRIPTION='For more materials, auto graders, and more courses, please see www.masterprogrammer.com.'
 ```
@@ -185,7 +186,8 @@ two paragraph description
 ```
 
 Title / tags / description are sanitized for YouTube (no HTML-like
-`<tags>` or raw angle brackets). Defaults: model `qwen3:4b` at
+`<tags>` or raw angle brackets). Tags shorter than 3 characters are dropped
+(YouTube rejects them anyway). Defaults: model `qwen3:4b` at
 `http://localhost:11434`. Use `--force` to overwrite existing `desc/` files.
 
 ### 6. Build `media.yaml`
@@ -198,8 +200,8 @@ Builds / refreshes `media.yaml` from:
 
 - `MEDIA_ROOT` (inventory: every `.mov` / `.mp4` / `.m4v`;
   top-level `archive/` is skipped)
-- `lessons.json` (`DJ nn.mm` prefix and youtube ids; Review wording is
-  lessons-only and is **not** stored in `media.yaml`)
+- `lessons.json` (optional `TITLE_PREFIX` / `TOKEN nn.mm` and youtube ids;
+  Review wording is lessons-only and is **not** stored in `media.yaml`)
 - `youtube/youtube-playlist.jsonl` (youtube id / description matching)
 - `WHISPER_ROOT/desc/...` (AI title, tags, description from `whisper-desc`)
 
@@ -207,13 +209,14 @@ Builds / refreshes `media.yaml` from:
 Kaltura later). Course extras and AI metadata are baked onto each entry so
 upload tools only need to read `media.yaml`.
 
-Titles are composed as:
+Titles:
 
-```text
-DJ nn.mm <AI title from desc> (m:ss)
-```
+- `title` — course-facing title from `lessons.json` (plus optional `TITLE_PREFIX`
+  / `TOKEN nn.mm` and `(m:ss)` duration)
+- `ai_title` — AI-generated title from `whisper/desc` (kept for comparison;
+  does **not** overwrite `title`)
 
-falling back to the cleaned lessons.json title body when no AI title exists.
+Falls back to the cleaned lessons.json title body when composing either field.
 Also records `size`, `md5`, `duration`, and `duration_text` from disk.
 
 Description priority: AI `whisper/desc` if present, else YouTube playlist
@@ -229,7 +232,7 @@ on the playlist is kept over `lessons.json` (`--force-youtube` to overwrite).
 Top-level globals are copied from `media.env` on each run:
 
 `course_root`, `media_root`, `whisper_root`, `youtube_dir`, `youtube_playlist`,
-`course_hint`, `extra_tags`, and `extra_description`.
+`course_hint`, `title_prefix`, `extra_tags`, and `extra_description`.
 
 ### 7. Update titles in `lessons.json`
 
@@ -265,7 +268,10 @@ Updates title, description, and tags from each `media.yaml` entry (including
 any `EXTRA_*` content already baked in by bootstrap). `--only-playlist` limits
 updates to youtube ids present in `youtube/youtube-playlist.jsonl` (skips
 unlisted / off-playlist videos). If an entry has no tags,
-existing YouTube tags are left alone. Stops immediately if the YouTube API
+existing YouTube tags are left alone. Tags shorter than 3 characters are
+dropped. If title/description already match and `videos.list` returns no tags,
+tag-only retries are skipped (the API often omits tags even when set; use
+`--force-tags` to push anyway). Stops immediately if the YouTube API
 quota is exceeded. First OAuth run opens a browser; the token is cached at
 `$YOUTUBE_DIR/youtube-oauth-token.json`.
 
@@ -337,6 +343,7 @@ Media binaries usually live outside the www tree, for example:
 | `YOUTUBE_CLIENT_SECRETS` | OAuth tools | OAuth client JSON (default `~/.ssh/youtube_client_secret.json`) |
 | `YOUTUBE_TOKEN` | OAuth tools | OAuth token cache path |
 | `COURSE_HINT` | `whisper-media.sh`, `whisper-folder.sh` | Prompt context for Whisper |
+| `TITLE_PREFIX` | bootstrap | Course title token (`DJ`, …); empty = no prefix (CC4E) |
 | `EXTRA_TAGS` | bootstrap | Appended to each entry's tags; also stored as `extra_tags` |
 | `EXTRA_DESCRIPTION` | bootstrap | Appended to each entry's description; also `extra_description` |
 | `MODEL` / `WHISPER_MODEL` | whisper scripts | ggml model path |

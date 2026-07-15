@@ -33,6 +33,8 @@ After media.yaml is the source of truth — push to YouTube
   update-youtube-from-media-yaml.py --apply --only-playlist
   update-youtube-from-media-yaml.py --apply --limit 1
   update-youtube-from-media-yaml.py --apply --only VIDEO_ID
+  update-youtube-from-media-yaml.py --apply --force-tags
+                                        # retry tags when API list returns none
 
 Check for drift
 ---------------
