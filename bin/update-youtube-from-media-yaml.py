@@ -9,9 +9,9 @@ Credentials (first run opens a browser for consent):
 
 Example:
   source media.env
-  update-youtube-from-media.py              # preview diffs
-  update-youtube-from-media.py --apply      # push changes
-  update-youtube-from-media.py --apply --limit 1
+  update-youtube-from-media-yaml.py              # preview diffs
+  update-youtube-from-media-yaml.py --apply      # push changes
+  update-youtube-from-media-yaml.py --apply --limit 1
 """
 
 from __future__ import annotations

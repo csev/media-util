@@ -128,14 +128,14 @@ export OLLAMA_HOST=http://localhost:11434
 ## Python packages
 
 `bootstrap-media-yaml.py` needs `ruamel.yaml`.
-`update-youtube-from-media.py` also needs the Google API client libraries:
+`update-youtube-from-media-yaml.py` also needs the Google API client libraries:
 
 ```bash
 cd /Users/csev/htdocs/media-util
 pip3 install -r requirements.txt
 ```
 
-### YouTube OAuth (for update-youtube-from-media.py)
+### YouTube OAuth (for update-youtube-from-media-yaml.py)
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), enable
    **YouTube Data API v3**.
@@ -154,15 +154,15 @@ pip3 install -r requirements.txt
 source /Users/csev/htdocs/dj4e/media.env
 cd /Users/csev/htdocs/dj4e
 test-youtube-oauth.py
-update-youtube-from-media.py
-update-youtube-from-media.py --apply
+update-youtube-from-media-yaml.py
+update-youtube-from-media-yaml.py --apply
 ```
 
 `test-youtube-oauth.py` opens a browser on first run, caches the token at
 `$YOUTUBE_DIR/youtube-oauth-token.json`, and verifies API access with the same
 scope used by the updater. Use `--reauth` to force a new consent.
 
-`update-youtube-from-media.py` pushes titles, descriptions, and tags from
+`update-youtube-from-media-yaml.py` pushes titles, descriptions, and tags from
 `media.yaml`, and stops immediately if the YouTube API quota is exceeded.
 ## Quick check
 

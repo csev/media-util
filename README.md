@@ -25,14 +25,14 @@ cd /Users/csev/htdocs/dj4e
 | Generate substitutions | `tar cfv whisper.tar whisper` then use ChatGPT |
 | Clean transcript mis-hears | `whisper-cleanup.py` |
 | Generate AI title/tags/desc | `whisper-desc` (requires `ollama serve`) |
-| Sync titles → lessons.json | `sync-lessons-titles-from-media.py` |
-| Build/Rebuild media.yaml | `bootstrap-media-yaml.py` |
+| Build/Rebuild media.yaml (reads whisper) | `bootstrap-media-yaml.py` |
+| Once media.yaml is the source of truth... | |
+| Update titles → lessons.json | `update-lessons-from-media-yaml.py` |
 | Test YouTube OAuth | `test-youtube-oauth.py` |
-| YouTube dry-run | `update-youtube-from-media.py` |
-| YouTube apply | `update-youtube-from-media.py --apply` |
-| YouTube apply one change | `update-youtube-from-media.py --apply --limit 1` |
-| YouTube apply one video | `update-youtube-from-media.py --apply --only VIDEO_ID` |
-| Maintenance | |
+| YouTube apply | `update-youtube-from-media-yaml.py --apply` |
+| YouTube apply one change | `update-youtube-from-media-yaml.py --apply --limit 1` |
+| YouTube apply one video | `update-youtube-from-media-yaml.py --apply --only VIDEO_ID` |
+| Maintenance / Checking | |
 | Diff lessons ↔ media.yaml | `compare-lessons.py` |
 | Diff media.yaml ↔ MEDIA_ROOT | `compare-media-root.py` |
 | Diff media.yaml ↔ playlist | `compare-youtube.py` |
@@ -43,9 +43,9 @@ Typical publish loop after transcriptions / desc exist:
 
 ```bash
 bootstrap-media-yaml.py
-sync-lessons-titles-from-media.py
-update-youtube-from-media.py              # dry-run
-update-youtube-from-media.py --apply      # write
+update-lessons-from-media-yaml.py
+update-youtube-from-media-yaml.py              # dry-run
+update-youtube-from-media-yaml.py --apply      # write
 ```
 
 ## Prerequisites
@@ -218,11 +218,11 @@ Top-level globals are copied from `media.env` on each run:
 `course_root`, `media_root`, `whisper_root`, `youtube_dir`, `youtube_playlist`,
 `course_hint`, `extra_tags`, and `extra_description`.
 
-### 7. Sync titles into `lessons.json`
+### 7. Update titles in `lessons.json`
 
 ```bash
-sync-lessons-titles-from-media.py          # write
-sync-lessons-titles-from-media.py --dry-run
+update-lessons-from-media-yaml.py          # write
+update-lessons-from-media-yaml.py --dry-run
 ```
 
 Copies `media.yaml` titles onto `lessons.json` entries that have a `media`
@@ -241,10 +241,10 @@ enabled. Save the client JSON as `~/.ssh/youtube_client_secret.json` (or set
 ```bash
 pip3 install -r /Users/csev/htdocs/media-util/requirements.txt
 test-youtube-oauth.py                     # smoke-test OAuth + API
-update-youtube-from-media.py              # dry-run diffs
-update-youtube-from-media.py --apply      # write to YouTube
-update-youtube-from-media.py --apply --limit 1
-update-youtube-from-media.py --apply --only VIDEO_ID
+update-youtube-from-media-yaml.py              # dry-run diffs
+update-youtube-from-media-yaml.py --apply      # write to YouTube
+update-youtube-from-media-yaml.py --apply --limit 1
+update-youtube-from-media-yaml.py --apply --only VIDEO_ID
 ```
 
 Updates title, description, and tags from each `media.yaml` entry (including
@@ -290,8 +290,8 @@ Media binaries usually live outside the www tree, for example:
 |---|---|
 | `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
 | `test-youtube-oauth.py` | Smoke-test OAuth client + YouTube API access |
-| `update-youtube-from-media.py` | Push `media.yaml` titles, descriptions, and tags to YouTube |
-| `sync-lessons-titles-from-media.py` | Copy `media.yaml` titles into `lessons.json` (Review stays in lessons) |
+| `update-youtube-from-media-yaml.py` | Push `media.yaml` titles, descriptions, and tags to YouTube |
+| `update-lessons-from-media-yaml.py` | Copy `media.yaml` titles into `lessons.json` (Review stays in lessons) |
 | `compare-lessons-root.py` | Diff `lessons.json` vs `MEDIA_ROOT` |
 | `compare-lessons-youtube.py` | Diff `lessons.json` vs YouTube playlist JSONL |
 | `compare-whisper-root.py` | Diff whisper artifacts vs `MEDIA_ROOT` (`--remove` orphans) |

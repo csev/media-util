@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 
-# Same scope as update-youtube-from-media.py so one consent covers both tools.
+# Same scope as update-youtube-from-media-yaml.py so one consent covers both tools.
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 
 

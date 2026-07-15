@@ -11,8 +11,8 @@ Review is a lessons.json-only concept:
 
 Usage:
   source media.env
-  sync-lessons-titles-from-media.py
-  sync-lessons-titles-from-media.py --dry-run
+  update-lessons-from-media-yaml.py
+  update-lessons-from-media-yaml.py --dry-run
 """
 
 from __future__ import annotations
