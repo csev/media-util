@@ -26,7 +26,7 @@ cd /Users/csev/htdocs/dj4e
 | Clean transcript mis-hears | `whisper-cleanup.py` |
 | Generate AI title/tags/desc | `whisper-desc` (requires `ollama serve`) |
 | Build/Rebuild media.yaml (reads whisper) | `bootstrap-media-yaml.py` |
-| Update titles → lessons.json | `update-lessons-from-media-yaml.py` |
+| Update media.yaml titles → lessons.json | `update-lessons-from-media-yaml.py` |
 
 At this point `media.yaml` is the course of truth.   We can get the titles,
 descriptions, and tags uploaded into the YouTube playlist.
