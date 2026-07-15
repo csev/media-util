@@ -59,7 +59,8 @@ usage() {
 Usage: $(basename "$0") [--force|-f] [--verbose|-v] [--from-lessons] [--lessons PATH]
 
 Scans MEDIA_ROOT (default) or media paths from lessons.json (--from-lessons)
-and writes transcripts under WHISPER_ROOT.
+and writes transcripts under WHISPER_ROOT. A top-level MEDIA_ROOT/archive/
+directory (retired masters) is skipped when scanning the tree.
 
 Required environment:
   MEDIA_ROOT     Directory tree of .mov/.mp4/.m4v files
@@ -600,7 +601,9 @@ PY
 else
     (
         cd "$MEDIA_ROOT" || exit 1
-        find . -type f \( -iname "*.mov" -o -iname "*.mp4" -o -iname "*.m4v" \) -print |
+        # Skip top-level archive/ (retired masters; not current inventory)
+        find . \( -path './archive' -o -path './archive/*' \) -prune -o \
+            -type f \( -iname "*.mov" -o -iname "*.mp4" -o -iname "*.m4v" \) -print |
             sed 's#^\./##' |
             LC_ALL=C sort
     ) > "$MEDIA_LIST" || fail "Could not build media list"

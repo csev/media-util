@@ -774,20 +774,30 @@ def load_media_files(files_path: Path) -> list[str]:
 
 
 MEDIA_SUFFIXES = {".mov", ".mp4", ".m4v"}
+# Top-level directory under MEDIA_ROOT that holds retired masters.
+# Scans never descend into it (compare / bootstrap / whisper inventory).
+MEDIA_ARCHIVE_DIR = "archive"
 
 
 def scan_media_root(media_root: Path) -> list[str]:
-    """Return sorted relative paths of media files under media_root."""
+    """Return sorted relative paths of media files under media_root.
+
+    Skips the top-level ``archive/`` directory entirely.
+    """
     if not media_root.is_dir():
         raise SystemExit(f"Error: media root is not a directory: {media_root}")
 
     result: list[str] = []
-    for path in media_root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in MEDIA_SUFFIXES:
-            continue
-        result.append(path.relative_to(media_root).as_posix())
+    media_root = media_root.resolve()
+    for dirpath, dirnames, filenames in os.walk(media_root, topdown=True):
+        # Never descend into MEDIA_ROOT/archive/
+        if Path(dirpath) == media_root and MEDIA_ARCHIVE_DIR in dirnames:
+            dirnames.remove(MEDIA_ARCHIVE_DIR)
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.suffix.lower() not in MEDIA_SUFFIXES:
+                continue
+            result.append(path.relative_to(media_root).as_posix())
 
     result.sort(key=lambda name: name.encode("utf-8"))
     if not result:

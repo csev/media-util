@@ -190,7 +190,8 @@ bootstrap-media-yaml.py
 
 Builds / refreshes `media.yaml` from:
 
-- `MEDIA_ROOT` (inventory: every `.mov` / `.mp4` / `.m4v`)
+- `MEDIA_ROOT` (inventory: every `.mov` / `.mp4` / `.m4v`;
+  top-level `archive/` is skipped)
 - `lessons.json` (`DJ nn.mm` prefix and youtube ids; Review wording is
   lessons-only and is **not** stored in `media.yaml`)
 - `youtube/youtube-playlist.jsonl` (youtube id / description matching)
@@ -321,7 +322,7 @@ Media binaries usually live outside the www tree, for example:
 |---|---|---|
 | `MEDIA_UTIL` | `media.env` | Path to this repo; its `bin/` is prepended to `PATH` |
 | `COURSE_ROOT` | `media.env` | Course www root (pwd check) |
-| `MEDIA_ROOT` | whisper / compare / bootstrap | Media binary tree |
+| `MEDIA_ROOT` | whisper / compare / bootstrap | Media binary tree (`archive/` skipped) |
 | `WHISPER_ROOT` | whisper tools / `whisper-desc` / cleanup | Whisper output tree |
 | `YOUTUBE_DIR` | dump / bootstrap / YouTube update | Course `youtube/` folder |
 | `YOUTUBE_PLAYLIST` | `dump-youtube-playlist.sh` | Course playlist URL |
