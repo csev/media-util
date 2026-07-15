@@ -8,8 +8,11 @@ Descriptions prefer WHISPER_ROOT/desc (whisper-desc) when present, else the
 YouTube playlist description. Titles are composed as
 ``DJ nn.mm <AI title> (duration)`` from lessons.json + whisper/desc.
 Course EXTRA_TAGS / EXTRA_DESCRIPTION from media.env are appended onto each
-entry's tags/description. Preserves manually edited youtube_id / kaltura_id
-on rerun via ruamel.yaml (AI descriptions refresh whenever the desc file exists).
+entry's tags/description. youtube_id prefers a playlist match, then the
+lessons.json youtube id for the same media path (even when unlisted / not on
+the playlist), and preserves a media.yaml youtube_id that is already on the
+playlist. kaltura_id is preserved on rerun via ruamel.yaml (AI descriptions
+refresh whenever the desc file exists).
 """
 
 from __future__ import annotations
@@ -230,10 +233,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force-youtube",
         action="store_true",
         help=(
-            "Overwrite existing youtube_id from the playlist, and description "
-            "when no AI whisper/desc file is present. "
-            "Without this flag, only null/empty youtube_id values are filled; "
-            "AI descriptions always refresh when present."
+            "Overwrite existing youtube_id using playlist match, else "
+            "lessons.json youtube id; also refresh description when no AI "
+            "whisper/desc file is present. Without this flag, a media.yaml "
+            "youtube_id that is already on the playlist is kept; otherwise "
+            "playlist then lessons.json fill the id. AI descriptions always "
+            "refresh when present."
         ),
     )
     return parser.parse_args(argv)
@@ -510,6 +515,72 @@ def match_youtube_entry(
             return by_basename[key]
 
     return None
+
+
+def normalize_youtube_id(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def resolve_youtube_id(
+    rel_name: str,
+    *,
+    existing_youtube_id: Any,
+    lesson_youtube_id: str | None,
+    lesson_title: str | None,
+    by_id: dict[str, dict[str, Any]],
+    by_title: dict[str, dict[str, Any]],
+    by_basename: dict[str, dict[str, Any]],
+    force: bool = False,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Choose youtube_id for a media path.
+
+    Priority:
+      1. Playlist match — via media.yaml id already on the playlist, lessons.json
+         id on the playlist, title, or basename
+      2. lessons.json youtube id for this exact media path (even if unlisted /
+         absent from the playlist, e.g. copyright extras)
+      3. Existing media.yaml youtube_id
+
+    When media.yaml already stores an id that is on the playlist, lessons.json
+    does not override it unless ``force`` is set.
+    """
+    existing = normalize_youtube_id(existing_youtube_id)
+    lesson_id = normalize_youtube_id(lesson_youtube_id)
+
+    if existing and existing in by_id:
+        lookup_id = existing
+    elif lesson_id and lesson_id in by_id:
+        lookup_id = lesson_id
+    else:
+        lookup_id = lesson_id
+
+    yt_entry = match_youtube_entry(
+        rel_name,
+        lesson_title=lesson_title,
+        lesson_youtube_id=lookup_id,
+        by_id=by_id,
+        by_title=by_title,
+        by_basename=by_basename,
+    )
+    playlist_id = normalize_youtube_id(yt_entry.get("id") if yt_entry else None)
+
+    if force:
+        chosen = playlist_id or lesson_id or existing
+        return chosen, yt_entry
+
+    # Already-on-playlist id in media.yaml wins over lessons.json.
+    if existing and existing in by_id:
+        return existing, yt_entry or by_id.get(existing)
+
+    if playlist_id:
+        return playlist_id, yt_entry
+
+    if lesson_id:
+        return lesson_id, yt_entry
+
+    return existing, yt_entry
 
 
 def empty_value(value: Any) -> bool:
@@ -909,11 +980,13 @@ def ordered_entry(
     force_description: bool = False,
     force_tags: bool = False,
 ) -> CommentedMap:
-    """Update an entry in place so ruamel comments/formatting are preserved."""
+    """Update an entry in place so ruamel comments/formatting are preserved.
+
+    ``youtube_id`` is expected to already be resolved by the caller
+    (playlist, then lessons.json, then existing).
+    """
     preserved = {key: existing.get(key, None) for key in PRESERVE_KEYS}
-    preserved["youtube_id"] = choose_field(
-        preserved["youtube_id"], youtube_id, force=force_youtube
-    )
+    preserved["youtube_id"] = youtube_id
     preserved["description"] = as_literal_description(
         choose_field(
             preserved["description"],
@@ -1022,6 +1095,7 @@ def main(argv: list[str] | None = None) -> int:
     old_entries = data["entries"]
     updated: dict[str, CommentedMap] = {}
     youtube_matched = 0
+    youtube_from_lessons: list[str] = []
     youtube_unmatched: list[str] = []
     ai_desc_count = 0
     yt_desc_count = 0
@@ -1047,28 +1121,31 @@ def main(argv: list[str] | None = None) -> int:
             is_new=is_new,
         )
 
-        yt_entry = match_youtube_entry(
+        lesson_title_for_yt = title_map.get(rel_name) or lesson_title
+        youtube_id, yt_entry = resolve_youtube_id(
             rel_name,
-            lesson_title=title_map.get(rel_name) or lesson_title,
+            existing_youtube_id=existing.get("youtube_id"),
             lesson_youtube_id=lesson_youtube_map.get(rel_name),
+            lesson_title=lesson_title_for_yt,
             by_id=by_id,
             by_title=by_title,
             by_basename=by_basename,
+            force=args.force_youtube,
         )
-        youtube_id = None
         youtube_description = None
         if yt_entry is not None:
             youtube_matched += 1
-            youtube_id = yt_entry.get("id")
             youtube_description = yt_entry.get("description")
             if isinstance(youtube_description, str):
                 youtube_description = youtube_description.strip() or None
             else:
                 youtube_description = None
+        elif youtube_id:
+            youtube_from_lessons.append(rel_name)
         elif playlist:
             youtube_unmatched.append(rel_name)
             warnings.warn(
-                f"No YouTube playlist match for {rel_name!r}",
+                f"No YouTube playlist or lessons.json youtube id for {rel_name!r}",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1152,11 +1229,24 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Titles: {ai_title_count} from whisper/desc, "
           f"{len(media_files) - ai_title_count} from lessons.json fallback")
     print(f"Tags: {ai_tags_count} from whisper/desc")
-    if playlist:
+    if playlist or youtube_from_lessons or youtube_unmatched:
         print(
-            f"YouTube matches: {youtube_matched}/{len(media_files)} "
-            f"from {args.youtube_playlist}"
+            f"YouTube ids: {youtube_matched} from playlist"
+            + (
+                f" ({args.youtube_playlist})"
+                if playlist
+                else ""
+            )
+            + f", {len(youtube_from_lessons)} from lessons.json only"
+            + f", {len(youtube_unmatched)} unmatched"
         )
+        if youtube_from_lessons:
+            print(
+                f"Filled from lessons.json (not in playlist) "
+                f"({len(youtube_from_lessons)}):"
+            )
+            for name in youtube_from_lessons:
+                print(f"  {name}")
         if youtube_unmatched:
             print(f"Unmatched media files ({len(youtube_unmatched)}):")
             for name in youtube_unmatched:

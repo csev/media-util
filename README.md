@@ -35,6 +35,7 @@ descriptions, and tags uploaded into the YouTube playlist.
 |---|---|
 | Test YouTube OAuth | `test-youtube-oauth.py` |
 | YouTube apply | `update-youtube-from-media-yaml.py --apply` |
+| YouTube apply (playlist only) | `update-youtube-from-media-yaml.py --apply --only-playlist` |
 | YouTube apply one change | `update-youtube-from-media-yaml.py --apply --limit 1` |
 | YouTube apply one video | `update-youtube-from-media-yaml.py --apply --only VIDEO_ID` |
 
@@ -212,8 +213,11 @@ Description priority: AI `whisper/desc` if present, else YouTube playlist
 (empty fields only, unless `--force-youtube`). Tags come from AI `whisper/desc`
 when present (comma-separated string). Course `EXTRA_TAGS` / `EXTRA_DESCRIPTION`
 from `media.env` are appended onto each entry (and also stored as top-level
-`extra_tags` / `extra_description`). Existing `youtube_id` is filled when empty
-(`--force-youtube` to overwrite). `kaltura_id` is preserved.
+`extra_tags` / `extra_description`). `youtube_id` prefers a playlist match, then
+the `lessons.json` youtube id for the same media path (including unlisted
+videos that are not on the playlist). A `media.yaml` youtube_id that is already
+on the playlist is kept over `lessons.json` (`--force-youtube` to overwrite).
+`kaltura_id` is preserved.
 
 Top-level globals are copied from `media.env` on each run:
 
@@ -245,12 +249,15 @@ pip3 install -r /Users/csev/htdocs/media-util/requirements.txt
 test-youtube-oauth.py                     # smoke-test OAuth + API
 update-youtube-from-media-yaml.py              # dry-run diffs
 update-youtube-from-media-yaml.py --apply      # write to YouTube
+update-youtube-from-media-yaml.py --apply --only-playlist
 update-youtube-from-media-yaml.py --apply --limit 1
 update-youtube-from-media-yaml.py --apply --only VIDEO_ID
 ```
 
 Updates title, description, and tags from each `media.yaml` entry (including
-any `EXTRA_*` content already baked in by bootstrap). If an entry has no tags,
+any `EXTRA_*` content already baked in by bootstrap). `--only-playlist` limits
+updates to youtube ids present in `youtube/youtube-playlist.jsonl` (skips
+unlisted / off-playlist videos). If an entry has no tags,
 existing YouTube tags are left alone. Stops immediately if the YouTube API
 quota is exceeded. First OAuth run opens a browser; the token is cached at
 `$YOUTUBE_DIR/youtube-oauth-token.json`.

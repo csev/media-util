@@ -12,11 +12,13 @@ Example:
   update-youtube-from-media-yaml.py              # preview diffs
   update-youtube-from-media-yaml.py --apply      # push changes
   update-youtube-from-media-yaml.py --apply --limit 1
+  update-youtube-from-media-yaml.py --only-playlist   # skip unlisted / non-playlist
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -82,6 +84,13 @@ def default_token_path() -> Path:
     return default_youtube_dir() / "youtube-oauth-token.json"
 
 
+def default_youtube_playlist_jsonl() -> Path:
+    path = env_path("YOUTUBE_PLAYLIST_JSONL")
+    if path:
+        return path
+    return default_youtube_dir() / "youtube-playlist.jsonl"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -129,6 +138,25 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Only this youtube_id (repeatable) or media path substring",
+    )
+    parser.add_argument(
+        "--only-playlist",
+        action="store_true",
+        help=(
+            "Only update videos whose youtube_id appears in the course "
+            "playlist JSONL (skips unlisted / off-playlist ids such as "
+            "copyright extras). Combine with --only for a further filter."
+        ),
+    )
+    parser.add_argument(
+        "--youtube-playlist",
+        type=Path,
+        default=None,
+        help=(
+            "Playlist JSONL for --only-playlist "
+            "(default: $YOUTUBE_PLAYLIST_JSONL or "
+            "$YOUTUBE_DIR/youtube-playlist.jsonl)"
+        ),
     )
     parser.add_argument(
         "--sleep",
@@ -195,6 +223,47 @@ def filter_rows(rows: list[dict[str, Any]], only: list[str]) -> list[dict[str, A
         if any(n in blob for n in needles):
             out.append(row)
     return out
+
+
+def load_playlist_ids(path: Path) -> set[str]:
+    """Return youtube ids from a yt-dlp playlist JSONL dump."""
+    if not path.is_file():
+        fail(f"playlist JSONL not found: {path}")
+    ids: set[str] = set()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"cannot read {path}: {exc}")
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as exc:
+            fail(f"malformed JSONL in {path}:{lineno}: {exc}")
+        if not isinstance(entry, dict):
+            continue
+        youtube_id = entry.get("id")
+        if isinstance(youtube_id, str) and youtube_id.strip():
+            ids.add(youtube_id.strip())
+    if not ids:
+        fail(f"no youtube ids found in playlist JSONL: {path}")
+    return ids
+
+
+def filter_playlist_rows(
+    rows: list[dict[str, Any]], playlist_ids: set[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split rows into (on playlist, not on playlist)."""
+    on_playlist: list[dict[str, Any]] = []
+    off_playlist: list[dict[str, Any]] = []
+    for row in rows:
+        if row["youtube_id"] in playlist_ids:
+            on_playlist.append(row)
+        else:
+            off_playlist.append(row)
+    return on_playlist, off_playlist
 
 
 def tags_to_list(value: Any) -> list[str]:
@@ -412,6 +481,18 @@ def main() -> int:
     rows = filter_rows(load_media_entries(media_yaml), args.only)
     print(f"media.yaml: {media_yaml}")
     print(f"entries with youtube_id: {len(rows)}")
+
+    if args.only_playlist:
+        playlist_path = args.youtube_playlist or default_youtube_playlist_jsonl()
+        playlist_ids = load_playlist_ids(playlist_path)
+        rows, skipped_off = filter_playlist_rows(rows, playlist_ids)
+        print(f"youtube-playlist: {playlist_path} ({len(playlist_ids)} videos)")
+        print(f"on playlist: {len(rows)}")
+        if skipped_off:
+            print(f"skipped (not on playlist): {len(skipped_off)}")
+            for row in skipped_off:
+                print(f"  {row['youtube_id']}  {row['media']}")
+
     print(f"mode: {'APPLY' if args.apply else 'DRY-RUN'}")
 
     if not rows:
