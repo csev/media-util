@@ -275,6 +275,34 @@ tag-only retries are skipped (the API often omits tags even when set; use
 quota is exceeded. First OAuth run opens a browser; the token is cached at
 `$YOUTUBE_DIR/youtube-oauth-token.json`.
 
+### 9. Upload lectures to Kaltura (optional)
+
+Requires a Kaltura **admin secret** for the partner. Set in `media.env`:
+
+```bash
+export KALTURA_PARTNER_ID=1038472
+export KALTURA_SERVICE_URL='https://www.kaltura.com'
+# export KALTURA_CATEGORY_ID=…      # optional MediaSpace / category folder
+# export KALTURA_PLAYLIST_ID=…      # optional static playlist
+```
+
+Put the admin secret in `~/.ssh/kaltura_admin_secret` (one line) or
+`KALTURA_ADMIN_SECRET`.
+
+```bash
+pip3 install -r /Users/csev/htdocs/media-util/requirements.txt
+test-kaltura.py                                  # smoke-test session
+upload-kaltura-from-media-yaml.py                # dry-run missing kaltura_id
+upload-kaltura-from-media-yaml.py --apply --limit 1
+compare-kaltura.py                               # diff media.yaml ↔ Kaltura
+```
+
+Uploads each `media.yaml` entry with a null/empty `kaltura_id`. Metadata
+comes from the YAML entry (title, description, tags). The relative media path
+is stored as Kaltura `referenceId`. After each successful upload the new entry
+id is written back to `media.yaml` as `kaltura_id`. Use `--adopt` if Kaltura
+already has that `referenceId` and you only need to record the id.
+
 ## Course layout
 
 ```
@@ -315,6 +343,9 @@ Media binaries usually live outside the www tree, for example:
 | `test-youtube-oauth.py` | Smoke-test OAuth client + YouTube API access |
 | `update-youtube-from-media-yaml.py` | Push `media.yaml` titles, descriptions, and tags to YouTube |
 | `update-lessons-from-media-yaml.py` | Copy `media.yaml` titles into `lessons.json` (Review stays in lessons) |
+| `test-kaltura.py` | Smoke-test Kaltura partner + admin secret |
+| `upload-kaltura-from-media-yaml.py` | Upload missing `kaltura_id` entries; write ids back |
+| `compare-kaltura.py` | Diff `media.yaml` vs Kaltura (`referenceId` / ids) |
 | `compare-lessons-root.py` | Diff `lessons.json` vs `MEDIA_ROOT` |
 | `compare-lessons-youtube.py` | Diff `lessons.json` vs YouTube playlist JSONL |
 | `compare-whisper-root.py` | Diff whisper artifacts vs `MEDIA_ROOT` (`--remove` orphans) |
@@ -342,6 +373,13 @@ Media binaries usually live outside the www tree, for example:
 | `YOUTUBE_PLAYLIST_JSONL` | dump / bootstrap | Optional override for the JSONL path |
 | `YOUTUBE_CLIENT_SECRETS` | OAuth tools | OAuth client JSON (default `~/.ssh/youtube_client_secret.json`) |
 | `YOUTUBE_TOKEN` | OAuth tools | OAuth token cache path |
+| `KALTURA_PARTNER_ID` | Kaltura tools | Partner id |
+| `KALTURA_SERVICE_URL` | Kaltura tools | API host (default `https://www.kaltura.com`) |
+| `KALTURA_ADMIN_SECRET` | Kaltura tools | Admin API secret (or secret file) |
+| `KALTURA_SECRET_FILE` | Kaltura tools | Default `~/.ssh/kaltura_admin_secret` |
+| `KALTURA_CATEGORY_ID` | upload / compare | Optional category to attach / scan |
+| `KALTURA_PLAYLIST_ID` | upload | Optional static playlist to append |
+| `KALTURA_USER_ID` | Kaltura session | Session user (default `media-util`) |
 | `COURSE_HINT` | `whisper-media.sh`, `whisper-folder.sh` | Prompt context for Whisper |
 | `TITLE_PREFIX` | bootstrap | Course title token (`DJ`, …); empty = no prefix (CC4E) |
 | `EXTRA_TAGS` | bootstrap | Appended to each entry's tags; also stored as `extra_tags` |

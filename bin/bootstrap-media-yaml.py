@@ -66,6 +66,10 @@ GLOBAL_KEYS = (
     "whisper_root",
     "youtube_dir",
     "youtube_playlist",
+    "kaltura_partner_id",
+    "kaltura_service_url",
+    "kaltura_category_id",
+    "kaltura_playlist_id",
     "course_hint",
     "title_prefix",
     "extra_tags",
@@ -142,6 +146,10 @@ def apply_course_globals(data: CommentedMap, args: argparse.Namespace) -> None:
     data["whisper_root"] = env_or_none("WHISPER_ROOT")
     data["youtube_dir"] = env_or_none("YOUTUBE_DIR")
     data["youtube_playlist"] = env_or_none("YOUTUBE_PLAYLIST")
+    data["kaltura_partner_id"] = env_or_none("KALTURA_PARTNER_ID")
+    data["kaltura_service_url"] = env_or_none("KALTURA_SERVICE_URL")
+    data["kaltura_category_id"] = env_or_none("KALTURA_CATEGORY_ID")
+    data["kaltura_playlist_id"] = env_or_none("KALTURA_PLAYLIST_ID")
     data["course_hint"] = env_or_none("COURSE_HINT")
     data["title_prefix"] = title_prefix_token() or None
     data["extra_tags"] = env_or_none("EXTRA_TAGS")

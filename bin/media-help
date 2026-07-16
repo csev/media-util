@@ -36,12 +36,23 @@ After media.yaml is the source of truth — push to YouTube
   update-youtube-from-media-yaml.py --apply --force-tags
                                         # retry tags when API list returns none
 
+Kaltura (needs admin secret in media.env / ~/.ssh/kaltura_admin_secret)
+------------------------------------------------------------------------
+  test-kaltura.py                       Smoke-test partner + admin secret
+  upload-kaltura-from-media-yaml.py              Dry-run missing kaltura_id
+  upload-kaltura-from-media-yaml.py --apply --limit 1
+  upload-kaltura-from-media-yaml.py --apply --only lesson-01-welcome
+  upload-kaltura-from-media-yaml.py --apply --adopt
+                                        # record existing referenceId match
+  compare-kaltura.py                    Diff media.yaml ↔ Kaltura
+
 Check for drift
 ---------------
   dump-youtube-playlist.sh              Refresh playlist dump first
   compare-lessons.py                    Diff lessons.json ↔ media.yaml
   compare-media-root.py                 Diff MEDIA_ROOT ↔ media.yaml
   compare-youtube.py                    Diff media.yaml ↔ playlist
+  compare-kaltura.py                    Diff media.yaml ↔ Kaltura
   compare-whisper-root.py               Orphan whisper artifacts
   compare-whisper-root.py --remove      Delete orphan whisper artifacts
 

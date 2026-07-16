@@ -42,6 +42,9 @@ link_one dump-youtube-playlist.sh
 link_one update-lessons-from-media-yaml.py
 link_one update-youtube-from-media-yaml.py
 link_one test-youtube-oauth.py
+link_one upload-kaltura-from-media-yaml.py
+link_one compare-kaltura.py
+link_one test-kaltura.py
 link_one compare-media-root.py
 link_one compare-youtube.py
 link_one compare-lessons.py
