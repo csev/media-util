@@ -342,10 +342,11 @@ Media binaries usually live outside the www tree, for example:
 | `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
 | `test-youtube-oauth.py` | Smoke-test OAuth client + YouTube API access |
 | `update-youtube-from-media-yaml.py` | Push `media.yaml` titles, descriptions, and tags to YouTube |
-| `update-lessons-from-media-yaml.py` | Copy `media.yaml` titles into `lessons.json` (Review stays in lessons) |
+| `update-lessons-from-media-yaml.py` | Copy `media.yaml` titles + `kaltura_id` into `lessons.json` (Review stays in lessons) |
 | `test-kaltura.py` | Smoke-test Kaltura partner + admin secret |
 | `upload-kaltura-from-media-yaml.py` | Upload missing `kaltura_id` entries; write ids back |
-| `compare-kaltura.py` | Diff `media.yaml` vs Kaltura (`referenceId` / ids) |
+| `compare-kaltura.py` | Diff `media.yaml` vs Kaltura API (`referenceId` / ids; needs secret) |
+| `compare-kaltura-to-media-yaml.py` | Scrape public MediaSpace playlist ↔ `media.yaml` (no API key) |
 | `compare-lessons-root.py` | Diff `lessons.json` vs `MEDIA_ROOT` |
 | `compare-lessons-youtube.py` | Diff `lessons.json` vs YouTube playlist JSONL |
 | `compare-whisper-root.py` | Diff whisper artifacts vs `MEDIA_ROOT` (`--remove` orphans) |

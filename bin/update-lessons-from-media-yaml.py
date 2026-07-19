@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy media.yaml titles into lessons.json video entries.
+"""Copy media.yaml titles and kaltura_id into lessons.json video entries.
 
 Review is a lessons.json-only concept:
   - If the existing title is a review (starts with ``Review`` or contains
@@ -8,6 +8,10 @@ Review is a lessons.json-only concept:
   - Non-review media entries get the media.yaml title as-is (no review key).
   - Non-media entries whose title already starts with ``Review`` get
     ``"review": true`` only.
+
+``kaltura_id`` is copied from media.yaml onto items that share the same
+``media`` path when media.yaml has a non-empty value. Existing lessons
+``kaltura_id`` values are left alone when media.yaml is null/empty.
 
 Usage:
   source media.env
@@ -78,28 +82,59 @@ def compose_lesson_title(media_title: str, *, was_review: bool) -> str:
     return body
 
 
-def rebuild_item(item: dict[str, Any], title: str, *, review: bool) -> dict[str, Any]:
-    """Return a new dict with title updated and review key placed after title."""
+def normalize_kaltura_id(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def rebuild_item(
+    item: dict[str, Any],
+    title: str,
+    *,
+    review: bool,
+    kaltura_id: str | None = None,
+    set_kaltura: bool = False,
+) -> dict[str, Any]:
+    """Return a new dict with title/review/kaltura_id updated in a stable order."""
     out: dict[str, Any] = {}
     for key, value in item.items():
         if key == "review":
+            continue
+        if key == "kaltura_id":
+            # Drop old value; re-insert below in the preferred spot when updating.
+            if set_kaltura:
+                continue
+            out[key] = value
             continue
         if key == "title":
             out["title"] = title
             if review:
                 out["review"] = True
             continue
+        if key == "media" and set_kaltura and kaltura_id and "kaltura_id" not in out:
+            out["kaltura_id"] = kaltura_id
         out[key] = value
+        if key == "youtube" and set_kaltura and kaltura_id:
+            out["kaltura_id"] = kaltura_id
+
     if "title" not in out:
         out["title"] = title
         if review:
             out["review"] = True
+
+    if set_kaltura and kaltura_id and "kaltura_id" not in out:
+        out["kaltura_id"] = kaltura_id
+
     return out
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Update lessons.json titles from media.yaml (Review stays in lessons)."
+        description=(
+            "Update lessons.json titles and kaltura_id from media.yaml "
+            "(Review stays in lessons)."
+        )
     )
     parser.add_argument(
         "--lessons",
@@ -145,44 +180,77 @@ def main() -> int:
         return 1
 
     media_titles: dict[str, str] = {}
+    media_kaltura: dict[str, str] = {}
     for rel, entry in entries.items():
         if not isinstance(entry, dict):
             continue
         title = entry.get("title")
         if isinstance(title, str) and title.strip():
             media_titles[str(rel)] = title.strip()
+        kid = normalize_kaltura_id(entry.get("kaltura_id"))
+        if kid:
+            media_kaltura[str(rel)] = kid
 
     updated = 0
     review_flagged = 0
+    kaltura_updated = 0
     missing_media = 0
     samples: list[str] = []
 
     def walk_inplace(obj: Any) -> None:
-        nonlocal updated, review_flagged, missing_media
+        nonlocal updated, review_flagged, kaltura_updated, missing_media
         if isinstance(obj, dict):
             title = obj.get("title")
             media = obj.get("media")
             if isinstance(title, str) and isinstance(media, str):
                 media_title = media_titles.get(media)
-                if media_title is None:
+                wanted_kaltura = media_kaltura.get(media)
+                current_kaltura = normalize_kaltura_id(obj.get("kaltura_id"))
+
+                if media_title is None and media not in media_kaltura:
                     missing_media += 1
                 else:
                     was_review = is_review_title(title)
-                    new_title = compose_lesson_title(media_title, was_review=was_review)
+                    if media_title is not None:
+                        new_title = compose_lesson_title(
+                            media_title, was_review=was_review
+                        )
+                    else:
+                        new_title = title
                     review = starts_with_review(new_title)
                     needs_review_key = review and obj.get("review") is not True
                     drop_review = ("review" in obj) and not review
-                    if new_title != title or needs_review_key or drop_review:
-                        rebuilt = rebuild_item(obj, new_title, review=review)
+                    title_changed = new_title != title or needs_review_key or drop_review
+
+                    set_kaltura = (
+                        wanted_kaltura is not None
+                        and wanted_kaltura != current_kaltura
+                    )
+
+                    if title_changed or set_kaltura:
+                        rebuilt = rebuild_item(
+                            obj,
+                            new_title,
+                            review=review,
+                            kaltura_id=wanted_kaltura,
+                            set_kaltura=set_kaltura,
+                        )
                         obj.clear()
                         obj.update(rebuilt)
                         updated += 1
-                        if review:
+                        if review and (title_changed or needs_review_key):
                             review_flagged += 1
+                        if set_kaltura:
+                            kaltura_updated += 1
                         if len(samples) < 8:
-                            samples.append(
-                                f"  {title!r}\n    -> {new_title!r} review={review}"
-                            )
+                            bits = []
+                            if title_changed:
+                                bits.append(f"title {title!r} -> {new_title!r}")
+                            if set_kaltura:
+                                bits.append(
+                                    f"kaltura_id {current_kaltura!r} -> {wanted_kaltura!r}"
+                                )
+                            samples.append(f"  {media}: " + "; ".join(bits))
             elif isinstance(title, str) and starts_with_review(title):
                 if obj.get("review") is not True:
                     rebuilt = rebuild_item(obj, title.strip(), review=True)
@@ -202,9 +270,13 @@ def main() -> int:
     walk_inplace(lessons)
 
     print(f"lessons.json: {lessons_path}")
-    print(f"media.yaml:   {media_yaml_path} ({len(media_titles)} titles)")
+    print(
+        f"media.yaml:   {media_yaml_path} "
+        f"({len(media_titles)} titles, {len(media_kaltura)} kaltura_id)"
+    )
     print(f"entries updated: {updated}")
     print(f"review:true set: {review_flagged}")
+    print(f"kaltura_id set/updated: {kaltura_updated}")
     if missing_media:
         print(f"WARNING: media paths missing from media.yaml: {missing_media}")
     if samples:
