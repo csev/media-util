@@ -45,6 +45,7 @@ link_one test-youtube-oauth.py
 link_one upload-kaltura-from-media-yaml.py
 link_one compare-kaltura.py
 link_one compare-kaltura-to-media-yaml.py
+link_one kaltura-embed-urls
 link_one test-kaltura.py
 link_one compare-media-root.py
 link_one compare-youtube.py

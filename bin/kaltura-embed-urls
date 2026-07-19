@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Emit title + Kaltura embed URL pairs from media.yaml.
+
+Output format (two lines per entry, then a blank line):
+
+    Title here
+    https://…embed…entry_id=1_xxx
+
+    Next title
+    https://…
+
+Uses $KALTURA_EMBED (must contain {id}) and media.yaml kaltura_id values.
+
+Example:
+  source media.env
+  kaltura-embed-urls > kaltura-embeds.txt
+  kaltura-embed-urls -o kaltura-embeds.txt
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+from typing import Any, TextIO
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import compare_common as common  # noqa: E402
+import kaltura_common as kc  # noqa: E402
+
+
+def embed_template() -> str:
+    template = os.environ.get("KALTURA_EMBED", "").strip()
+    if not template or "{id}" not in template:
+        kc.fail(
+            "set KALTURA_EMBED with a {id} placeholder "
+            "(source media.env)"
+        )
+    return template
+
+
+def iter_embed_lines(entries: dict[str, Any], template: str) -> list[str]:
+    lines: list[str] = []
+    skipped = 0
+    for rel, entry in entries.items():
+        if not isinstance(entry, dict):
+            continue
+        kid = entry.get("kaltura_id")
+        if not (isinstance(kid, str) and kid.strip()):
+            skipped += 1
+            continue
+        title = entry.get("title")
+        if not (isinstance(title, str) and title.strip()):
+            title = str(rel)
+        url = template.replace("{id}", kid.strip())
+        lines.append(title.strip())
+        lines.append(url)
+        lines.append("")
+    if skipped:
+        print(
+            f"NOTE: skipped {skipped} entr{'y' if skipped == 1 else 'ies'} "
+            f"without kaltura_id",
+            file=sys.stderr,
+        )
+    return lines
+
+
+def write_output(lines: list[str], out: TextIO) -> None:
+    text = "\n".join(lines)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    out.write(text)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Write title + Kaltura embed URL pairs from media.yaml "
+            "(blank line between entries)."
+        )
+    )
+    parser.add_argument(
+        "--media-yaml",
+        type=Path,
+        default=None,
+        help="Path to media.yaml (default: $MEDIA_YAML / $COURSE_ROOT/media.yaml)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Write to this file (default: stdout)",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    media_yaml = args.media_yaml or kc.default_media_yaml()
+    data = common.load_media_yaml(media_yaml)
+    entries = data.get("entries") or {}
+    if not isinstance(entries, dict):
+        kc.fail(f"{media_yaml}: entries must be a mapping")
+
+    template = embed_template()
+    lines = iter_embed_lines(entries, template)
+    pairs = sum(1 for line in lines if line == "")
+    print(f"media.yaml: {media_yaml} ({pairs} embed URLs)", file=sys.stderr)
+
+    if args.output is None:
+        write_output(lines, sys.stdout)
+    else:
+        args.output.write_text(
+            ("\n".join(lines) + ("\n" if lines else "")),
+            encoding="utf-8",
+        )
+        print(f"wrote: {args.output}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

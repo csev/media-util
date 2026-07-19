@@ -46,6 +46,8 @@ Kaltura (needs admin secret in media.env / ~/.ssh/kaltura_admin_secret)
                                         # record existing referenceId match
   compare-kaltura-to-media-yaml.py      Scrape public playlist ↔ media.yaml (no API key)
   compare-kaltura.py                    Diff media.yaml ↔ Kaltura API (needs secret)
+  kaltura-embed-urls                    Title + embed URL list from media.yaml
+  kaltura-embed-urls -o embeds.txt
 
 Check for drift
 ---------------
