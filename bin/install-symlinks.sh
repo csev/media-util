@@ -41,6 +41,7 @@ link_one bootstrap-media-yaml.py
 link_one dump-youtube-playlist.sh
 link_one update-lessons-from-media-yaml.py
 link_one update-youtube-from-media-yaml.py
+link_one update-media-meta-from-fs.py
 link_one test-youtube-oauth.py
 link_one upload-kaltura-from-media-yaml.py
 link_one compare-kaltura.py

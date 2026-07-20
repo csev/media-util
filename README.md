@@ -32,6 +32,7 @@ cd /Users/csev/htdocs/dj4e
 | Clean transcript mis-hears | `whisper-cleanup.py` |
 | Generate AI title/tags/desc | `whisper-desc` (requires `ollama serve`) |
 | Build/Rebuild media.yaml (reads whisper) | `bootstrap-media-yaml.py` |
+| Refresh size/md5/duration/creation from disk | `update-media-meta-from-fs.py` |
 | Update media.yaml titles → lessons.json | `update-lessons-from-media-yaml.py` |
 
 At this point `media.yaml` is the course of truth.   We can get the titles,

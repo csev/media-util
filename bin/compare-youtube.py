@@ -1,19 +1,47 @@
 #!/usr/bin/env python3
-"""Compare youtube-playlist.jsonl against media.yaml YouTube fields."""
+"""Compare youtube-playlist.jsonl against media.yaml YouTube fields.
+
+Compares:
+  - youtube_id membership (yaml ↔ playlist)
+  - match hints for empty youtube_id
+  - duration (media.yaml seconds vs playlist duration; ±2s tolerance)
+"""
 
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compare_common as common  # noqa: E402
 
+# media.yaml duration is integer seconds from ffprobe; yt-dlp duration is seconds.
+DURATION_TOLERANCE_SEC = 2
+
+
+def parse_duration_seconds(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(round(value)) if value >= 0 else None
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(round(float(value.strip())))
+        except ValueError:
+            return None
+    return None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Report inconsistencies between youtube-playlist.jsonl and media.yaml."
+        description=(
+            "Report inconsistencies between youtube-playlist.jsonl and media.yaml "
+            "(ids, match hints, duration)."
+        )
     )
     parser.add_argument(
         "--media-yaml",
@@ -115,6 +143,35 @@ def main() -> int:
                 f"({matched.get('title')})"
             )
 
+    duration_mismatch: list[str] = []
+    for youtube_id, rels in sorted(yaml_ids.items()):
+        pl = by_id.get(youtube_id)
+        if pl is None:
+            continue
+        pl_dur = parse_duration_seconds(pl.get("duration"))
+        for rel in rels:
+            entry = entries.get(rel)
+            if not isinstance(entry, dict):
+                continue
+            y_dur = parse_duration_seconds(entry.get("duration"))
+            if y_dur is not None and pl_dur is not None:
+                if abs(y_dur - pl_dur) > DURATION_TOLERANCE_SEC:
+                    duration_mismatch.append(
+                        f"{rel}  youtube_id={youtube_id}  "
+                        f"yaml={y_dur}s  youtube={pl_dur}s  "
+                        f"delta={pl_dur - y_dur:+d}s"
+                    )
+            elif y_dur is not None and pl_dur is None:
+                duration_mismatch.append(
+                    f"{rel}  youtube_id={youtube_id}  "
+                    f"yaml={y_dur}s  youtube=(no duration in playlist dump)"
+                )
+            elif y_dur is None and pl_dur is not None:
+                duration_mismatch.append(
+                    f"{rel}  youtube_id={youtube_id}  "
+                    f"yaml=(no duration)  youtube={pl_dur}s"
+                )
+
     problems = 0
     problems += common.section(
         "media.yaml youtube_id not in playlist", id_not_in_playlist
@@ -128,6 +185,10 @@ def main() -> int:
     )
     problems += common.section(
         "media.yaml youtube_id differs from best playlist match", id_mismatch
+    )
+    problems += common.section(
+        f"Duration mismatch (tolerance ±{DURATION_TOLERANCE_SEC}s)",
+        duration_mismatch,
     )
 
     return common.summary_and_exit(problems)

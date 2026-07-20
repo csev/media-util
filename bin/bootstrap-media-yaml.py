@@ -53,6 +53,8 @@ ENTRY_KEYS = (
     "md5",
     "duration",
     "duration_text",
+    "container_creation",
+    "qt_creation",
     "tags",
     "description",
 )
@@ -940,14 +942,31 @@ def require_ffprobe() -> str:
 
 
 def probe_duration(ffprobe: str, path: Path) -> int:
+    return probe_media_meta(ffprobe, path)["duration"]
+
+
+def normalize_creation_timestamp(value: Any) -> str | None:
+    """Normalize ffprobe creation timestamps for media.yaml storage."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    # Drop useless fractional seconds: 2025-08-28T17:48:55.000000Z -> …55Z
+    text = re.sub(r"\.0+Z$", "Z", text)
+    text = re.sub(r"\.0+([+-]\d{2}:?\d{2})$", r"\1", text)
+    return text
+
+
+def probe_media_meta(ffprobe: str, path: Path) -> dict[str, Any]:
+    """Return duration (int seconds) plus container/QT creation timestamps."""
     cmd = [
         ffprobe,
         "-v",
         "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
+        "-print_format",
+        "json",
+        "-show_format",
         str(path),
     ]
     try:
@@ -967,13 +986,40 @@ def probe_duration(ffprobe: str, path: Path) -> int:
             f"(exit {completed.returncode}): {err or 'no details'}"
         )
 
-    raw = completed.stdout.strip()
     try:
-        return round(float(raw))
-    except ValueError as exc:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
         raise SystemExit(
-            f"Error: ffprobe returned non-numeric duration for {path}: {raw!r}"
+            f"Error: ffprobe returned invalid JSON for {path}: {exc}"
         ) from exc
+
+    fmt = payload.get("format") if isinstance(payload, dict) else None
+    if not isinstance(fmt, dict):
+        raise SystemExit(f"Error: ffprobe missing format block for {path}")
+
+    raw_duration = fmt.get("duration")
+    try:
+        duration = round(float(raw_duration))
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"Error: ffprobe returned non-numeric duration for {path}: {raw_duration!r}"
+        ) from exc
+
+    tags = fmt.get("tags") if isinstance(fmt.get("tags"), dict) else {}
+    # Tag names vary by demuxer; look up case-insensitively.
+    lower_tags = {
+        str(key).lower(): value for key, value in tags.items() if isinstance(key, str)
+    }
+    container = normalize_creation_timestamp(lower_tags.get("creation_time"))
+    qt = normalize_creation_timestamp(
+        lower_tags.get("com.apple.quicktime.creationdate")
+    )
+
+    return {
+        "duration": duration,
+        "container_creation": container,
+        "qt_creation": qt,
+    }
 
 
 def format_duration_text(seconds: int) -> str:
@@ -1054,6 +1100,8 @@ def ordered_entry(
     size: int,
     md5: str,
     duration: int,
+    container_creation: Any = None,
+    qt_creation: Any = None,
     youtube_id: Any = None,
     description: Any = None,
     tags: Any = None,
@@ -1097,6 +1145,8 @@ def ordered_entry(
     known = [key for key in existing.keys() if key in ENTRY_KEYS]
     needs_reorder = known != list(ENTRY_KEYS)
     duration_text = format_duration_text(duration)
+    container_creation = normalize_creation_timestamp(container_creation)
+    qt_creation = normalize_creation_timestamp(qt_creation)
     if needs_reorder or not existing:
         extras = [
             (key, value)
@@ -1112,6 +1162,8 @@ def ordered_entry(
         existing["md5"] = md5
         existing["duration"] = duration
         existing["duration_text"] = duration_text
+        existing["container_creation"] = container_creation
+        existing["qt_creation"] = qt_creation
         existing["tags"] = chosen_tags
         for key, value in extras:
             existing[key] = value
@@ -1127,6 +1179,8 @@ def ordered_entry(
     existing["md5"] = md5
     existing["duration"] = duration
     existing["duration_text"] = duration_text
+    existing["container_creation"] = container_creation
+    existing["qt_creation"] = qt_creation
     existing["tags"] = chosen_tags
     return existing
 
@@ -1280,7 +1334,8 @@ def main(argv: list[str] | None = None) -> int:
             description = merged_description
             force_description = True
 
-        duration = probe_duration(ffprobe, media_path)
+        meta = probe_media_meta(ffprobe, media_path)
+        duration = meta["duration"]
         # Course-facing title comes from lessons.json (plus optional TITLE_PREFIX).
         title = compose_media_title(lesson_title, None, duration)
         # Keep AI wording separately for later comparison / editing.
@@ -1297,6 +1352,8 @@ def main(argv: list[str] | None = None) -> int:
             size=media_path.stat().st_size,
             md5=file_md5(media_path),
             duration=duration,
+            container_creation=meta.get("container_creation"),
+            qt_creation=meta.get("qt_creation"),
             youtube_id=youtube_id,
             description=description,
             tags=tags,
