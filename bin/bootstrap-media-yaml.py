@@ -6,16 +6,25 @@ By default the inventory is scanned from MEDIA_ROOT / --media-root
 
 Descriptions prefer WHISPER_ROOT/desc (whisper-desc) when present, else the
 YouTube playlist description. Titles are composed as
-``[<TITLE_PREFIX> [nn.mm] ]<AI title> (duration)`` from lessons.json +
+``[<TITLE_PREFIX> nn.mm ]<AI title> (duration)`` from lessons.json +
 whisper/desc (``TITLE_PREFIX`` from media.env; empty means no course prefix —
-CC4E style). The composed lessons-based string is stored as ``title``; the
+CC4E style). When lessons titles lack ``TOKEN nn.mm``, ``nn`` / ``mm`` are the
+ordinals of the media folder and of the file within that folder
+(``TITLE_ORDINAL_START`` sets the first folder's ``nn``, default 1). The composed
+lessons-based string is stored as ``title``; the
 AI wording (when present) is stored separately as ``ai_title``. Course
 EXTRA_TAGS / EXTRA_DESCRIPTION from media.env are appended
 onto each entry's tags/description. youtube_id prefers a playlist match, then
 the lessons.json youtube id for the same media path (even when unlisted / not
 on the playlist), and preserves a media.yaml youtube_id that is already on the
-playlist. kaltura_id is preserved on rerun via ruamel.yaml (AI descriptions
-refresh whenever the desc file exists).
+playlist. Entry keys in media.yaml are always MEDIA_ROOT-relative
+``folder/file`` paths (never a bare filename and never an extra prefix such as
+``ca4e-media/folder/file``). When lessons.json uses a longer prefix, matching
+is by unique ``folder/file`` suffix. When ``kaltura_id`` is null/empty and a
+Kaltura playlist JSONL is present, fill it by matching playlist title to the
+media ``folder/file``, filename/stem (Kaltura often uses the upload filename
+as the title), or lesson title. Existing non-null ``kaltura_id`` values are
+preserved. AI descriptions refresh whenever the desc file exists.
 """
 
 from __future__ import annotations
@@ -74,6 +83,7 @@ GLOBAL_KEYS = (
     "kaltura_playlist_id",
     "course_hint",
     "title_prefix",
+    "title_ordinal_start",
     "extra_tags",
     "extra_description",
 )
@@ -86,6 +96,24 @@ TRAILING_DURATION_RE = re.compile(r"\s*\((?:\d+:)+\d+\)\s*$")
 def title_prefix_token() -> str:
     """Course title prefix token from media.env (e.g. ``DJ``). Empty = none."""
     return (os.environ.get("TITLE_PREFIX") or "").strip()
+
+
+def title_ordinal_start() -> int:
+    """Starting folder ordinal ``nn`` for ``TOKEN nn.mm`` (from media.env).
+
+    ``TITLE_ORDINAL_START`` defaults to ``1`` (DJ 01.01 style). Set to ``0`` for
+    courses that want the first media folder numbered ``00``.
+    """
+    raw = (os.environ.get("TITLE_ORDINAL_START") or "1").strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(
+            f"Error: TITLE_ORDINAL_START must be an integer, got {raw!r}"
+        ) from exc
+    if value < 0:
+        raise SystemExit(f"Error: TITLE_ORDINAL_START must be >= 0, got {value}")
+    return value
 
 
 def numbered_prefix_re(token: str | None = None) -> re.Pattern[str] | None:
@@ -154,6 +182,7 @@ def apply_course_globals(data: CommentedMap, args: argparse.Namespace) -> None:
     data["kaltura_playlist_id"] = env_or_none("KALTURA_PLAYLIST_ID")
     data["course_hint"] = env_or_none("COURSE_HINT")
     data["title_prefix"] = title_prefix_token() or None
+    data["title_ordinal_start"] = title_ordinal_start() if title_prefix_token() else None
     data["extra_tags"] = env_or_none("EXTRA_TAGS")
     data["extra_description"] = env_or_none("EXTRA_DESCRIPTION")
     # Drop legacy www_root if present from older media.yaml files.
@@ -193,6 +222,19 @@ def build_yaml() -> YAML:
     return yaml
 
 
+def default_kaltura_playlist_jsonl() -> Path:
+    value = os.environ.get("KALTURA_PLAYLIST_JSONL")
+    if value:
+        return Path(value)
+    kaltura_dir = os.environ.get("KALTURA_DIR")
+    if kaltura_dir:
+        return Path(kaltura_dir) / "kaltura-playlist.jsonl"
+    course_root = os.environ.get("COURSE_ROOT")
+    if course_root:
+        return Path(course_root) / "kaltura" / "kaltura-playlist.jsonl"
+    return CWD / "kaltura" / "kaltura-playlist.jsonl"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     media_root_default = os.environ.get("MEDIA_ROOT")
     youtube_jsonl_default = os.environ.get("YOUTUBE_PLAYLIST_JSONL")
@@ -202,6 +244,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             youtube_jsonl_default = str(Path(youtube_dir) / "youtube-playlist.jsonl")
         else:
             youtube_jsonl_default = str(CWD / "youtube" / "youtube-playlist.jsonl")
+    kaltura_jsonl_default = str(default_kaltura_playlist_jsonl())
 
     parser = argparse.ArgumentParser(
         description=(
@@ -280,6 +323,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "refresh when present."
         ),
     )
+    parser.add_argument(
+        "--kaltura-playlist",
+        type=Path,
+        default=Path(kaltura_jsonl_default),
+        help=(
+            "JSONL dump from dump-kaltura-playlist.py "
+            f"(default: {kaltura_jsonl_default}; "
+            "from KALTURA_PLAYLIST_JSONL / KALTURA_DIR when set)"
+        ),
+    )
+    parser.add_argument(
+        "--force-kaltura",
+        action="store_true",
+        help=(
+            "Overwrite existing kaltura_id using playlist match, else "
+            "lessons.json kaltura_id. Without this flag, only null/empty "
+            "kaltura_id values are filled."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -288,11 +350,18 @@ def load_lessons_media_map(
     relevant: set[str] | None = None,
     *,
     strict: bool = True,
-) -> tuple[dict[str, str], dict[str, str], dict[str, set[str]], dict[str, set[str]]]:
-    """Return (title_map, youtube_id_map, title_conflicts, youtube_conflicts).
+) -> tuple[
+    dict[str, str],
+    dict[str, str],
+    dict[str, str],
+    dict[str, set[str]],
+    dict[str, set[str]],
+    dict[str, set[str]],
+]:
+    """Return title/youtube/kaltura maps and conflict dicts.
 
     Schema (inspected): top-level ``modules`` list; each module has ``items``.
-    Items may include ``media``, ``title``, and ``youtube``.
+    Items may include ``media``, ``title``, ``youtube``, and ``kaltura_id``.
 
     Identical reuses are allowed. Conflicting titles/youtube IDs for the same
     media path are collected; when ``strict`` is true they raise SystemExit
@@ -329,8 +398,10 @@ def load_lessons_media_map(
 
     title_map: dict[str, str] = {}
     youtube_map: dict[str, str] = {}
+    kaltura_map: dict[str, str] = {}
     title_conflicts: dict[str, set[str]] = {}
     youtube_conflicts: dict[str, set[str]] = {}
+    kaltura_conflicts: dict[str, set[str]] = {}
 
     for module in modules:
         if not isinstance(module, dict):
@@ -382,9 +453,31 @@ def load_lessons_media_map(
                 else:
                     youtube_map[media] = youtube
 
+            kaltura = item.get("kaltura_id")
+            if isinstance(kaltura, str) and kaltura.strip():
+                kaltura = kaltura.strip()
+                if media in kaltura_map:
+                    if kaltura_map[media] != kaltura:
+                        kaltura_conflicts.setdefault(media, {kaltura_map[media]}).add(
+                            kaltura
+                        )
+                else:
+                    kaltura_map[media] = kaltura
+
     if relevant is not None:
-        title_conflicts = {k: v for k, v in title_conflicts.items() if k in relevant}
-        youtube_conflicts = {k: v for k, v in youtube_conflicts.items() if k in relevant}
+        title_conflicts = {
+            k: v for k, v in title_conflicts.items() if lessons_path_relevant(k, relevant)
+        }
+        youtube_conflicts = {
+            k: v
+            for k, v in youtube_conflicts.items()
+            if lessons_path_relevant(k, relevant)
+        }
+        kaltura_conflicts = {
+            k: v
+            for k, v in kaltura_conflicts.items()
+            if lessons_path_relevant(k, relevant)
+        }
 
     if strict and title_conflicts:
         lines = [
@@ -408,7 +501,92 @@ def load_lessons_media_map(
                 lines.append(f"    - {youtube_id}")
         raise SystemExit("\n".join(lines))
 
-    return title_map, youtube_map, title_conflicts, youtube_conflicts
+    if strict and kaltura_conflicts:
+        lines = [
+            f"Error: duplicate filename mappings with conflicting kaltura IDs "
+            f"in {lessons_path}:"
+        ]
+        for media, ids in sorted(kaltura_conflicts.items()):
+            lines.append(f"  {media}:")
+            for kaltura_id in sorted(ids):
+                lines.append(f"    - {kaltura_id}")
+        raise SystemExit("\n".join(lines))
+
+    return (
+        title_map,
+        youtube_map,
+        kaltura_map,
+        title_conflicts,
+        youtube_conflicts,
+        kaltura_conflicts,
+    )
+
+
+def folder_file_key(path: str) -> str:
+    """Return the canonical ``folder/file`` (or bare file) form of a media path.
+
+    media.yaml keys and MEDIA_ROOT inventory use this shape — never an extra
+    leading prefix such as ``ca4e-media/folder/file``.
+    """
+    parts = [part for part in Path(path).as_posix().strip("/").split("/") if part]
+    if not parts:
+        return path
+    if len(parts) >= 2:
+        return "/".join(parts[-2:])
+    return parts[0]
+
+
+def lessons_path_relevant(lessons_path: str, relevant: set[str]) -> bool:
+    """True if a lessons.json media key corresponds to a MEDIA_ROOT relative path.
+
+    Matches exact path or unique shared ``folder/file``
+    (e.g. lessons ``ca4e-media/01-Origins/foo.m4v`` vs root ``01-Origins/foo.m4v``).
+    """
+    if lessons_path in relevant:
+        return True
+    key = folder_file_key(lessons_path)
+    if key in relevant:
+        return True
+    return any(folder_file_key(rel) == key for rel in relevant)
+
+
+def build_lessons_folder_file_index(lessons_map: dict[str, Any]) -> dict[str, str]:
+    """Map ``folder/file`` -> lessons media key when that key is unique."""
+    groups: dict[str, list[str]] = {}
+    for key in lessons_map:
+        groups.setdefault(folder_file_key(key), []).append(key)
+    return {ff: keys[0] for ff, keys in groups.items() if len(keys) == 1}
+
+
+def match_lessons_media_key(
+    rel_path: str,
+    lessons_map: dict[str, Any],
+    folder_file_index: dict[str, str] | None = None,
+) -> str | None:
+    """Return the lessons.json media key for a MEDIA_ROOT ``folder/file`` path.
+
+    Order:
+      1. Exact path match
+      2. Unique ``folder/file`` match (strips a longer lessons prefix)
+    """
+    if rel_path in lessons_map:
+        return rel_path
+    index = folder_file_index
+    if index is None:
+        index = build_lessons_folder_file_index(lessons_map)
+    return index.get(folder_file_key(rel_path))
+
+
+def lookup_lessons_media(
+    rel_path: str,
+    lessons_map: dict[str, Any],
+    folder_file_index: dict[str, str] | None = None,
+) -> Any | None:
+    """Look up a lessons.json value for a MEDIA_ROOT ``folder/file`` path."""
+    key = match_lessons_media_key(rel_path, lessons_map, folder_file_index)
+    if key is None:
+        return None
+    return lessons_map[key]
 
 
 def normalize_title(title: str) -> str:
@@ -572,6 +750,161 @@ def normalize_youtube_id(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def normalize_kaltura_id(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def load_kaltura_playlist(playlist_path: Path) -> list[dict[str, Any]]:
+    """Load dump-kaltura-playlist.py JSONL; missing file → empty (no error)."""
+    if not playlist_path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    try:
+        lines = playlist_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SystemExit(
+            f"Error: cannot read Kaltura playlist {playlist_path}: {exc}"
+        ) from exc
+
+    for lineno, raw in enumerate(lines, start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"Error: malformed JSONL in {playlist_path} line {lineno}: {exc.msg}"
+            ) from exc
+        if not isinstance(obj, dict) or not obj.get("id"):
+            warnings.warn(
+                f"Skipping Kaltura playlist line {lineno}: missing id",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+        entries.append(obj)
+    return entries
+
+
+def _index_kaltura_name(index: dict[str, dict[str, Any]], name: str, entry: dict[str, Any]) -> None:
+    text = name.strip()
+    if not text:
+        return
+    index.setdefault(text, entry)
+    index.setdefault(text.lower(), entry)
+    path = Path(text)
+    index.setdefault(path.name, entry)
+    index.setdefault(path.name.lower(), entry)
+    index.setdefault(path.stem, entry)
+    index.setdefault(path.stem.lower(), entry)
+    ff = folder_file_key(text)
+    index.setdefault(ff, entry)
+    index.setdefault(ff.lower(), entry)
+
+
+def index_kaltura_playlist(
+    playlist: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Index Kaltura playlist by id and by title/filename/folder-file keys."""
+    by_id: dict[str, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
+
+    for entry in playlist:
+        kaltura_id = str(entry["id"])
+        by_id[kaltura_id] = entry
+        title = entry.get("title") or entry.get("name") or ""
+        if isinstance(title, str):
+            _index_kaltura_name(by_name, title, entry)
+            # Also index normalized lesson-style titles when present.
+            normalized = normalize_title(title)
+            if normalized:
+                by_name.setdefault(normalized, entry)
+
+    return by_id, by_name
+
+
+def match_kaltura_entry(
+    rel_name: str,
+    *,
+    lesson_title: str | None,
+    lesson_kaltura_id: str | None,
+    by_id: dict[str, dict[str, Any]],
+    by_name: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Match media to a Kaltura playlist entry via id, path, filename, or title."""
+    if lesson_kaltura_id and lesson_kaltura_id in by_id:
+        return by_id[lesson_kaltura_id]
+
+    candidates = [
+        rel_name,
+        folder_file_key(rel_name),
+        Path(rel_name).name,
+        Path(rel_name).stem,
+    ]
+    for key in candidates:
+        if not key:
+            continue
+        if key in by_name:
+            return by_name[key]
+        lower = key.lower()
+        if lower in by_name:
+            return by_name[lower]
+
+    if lesson_title:
+        normalized = normalize_title(lesson_title)
+        if normalized and normalized in by_name:
+            return by_name[normalized]
+
+    return None
+
+
+def resolve_kaltura_id(
+    rel_name: str,
+    *,
+    existing_kaltura_id: Any,
+    lesson_kaltura_id: str | None,
+    lesson_title: str | None,
+    by_id: dict[str, dict[str, Any]],
+    by_name: dict[str, dict[str, Any]],
+    force: bool = False,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Choose kaltura_id for a media path.
+
+    Priority:
+      1. Existing media.yaml id (kept when set, unless ``force``)
+      2. Playlist match via id / folder/file / filename / stem / title
+      3. lessons.json kaltura_id
+    """
+    existing = normalize_kaltura_id(existing_kaltura_id)
+    lesson_id = normalize_kaltura_id(lesson_kaltura_id)
+
+    if existing and not force:
+        return existing, by_id.get(existing)
+
+    lookup_id = existing if (existing and existing in by_id) else lesson_id
+    entry = match_kaltura_entry(
+        rel_name,
+        lesson_title=lesson_title,
+        lesson_kaltura_id=lookup_id,
+        by_id=by_id,
+        by_name=by_name,
+    )
+    playlist_id = normalize_kaltura_id(entry.get("id") if entry else None)
+
+    if force:
+        return playlist_id or lesson_id or existing, entry
+
+    if playlist_id:
+        return playlist_id, entry
+    if lesson_id:
+        return lesson_id, entry
+    return existing, entry
 
 
 def resolve_youtube_id(
@@ -781,6 +1114,39 @@ def extract_title_prefix(title: str) -> str | None:
     return match.group(1) if match else None
 
 
+def build_media_ordinal_prefixes(media_files: list[str]) -> dict[str, str]:
+    """Map each MEDIA_ROOT ``folder/file`` path to ``TOKEN nn.mm``.
+
+    ``nn`` is the folder ordinal (sorted order of unique parent directories in
+    ``media_files``), starting at ``TITLE_ORDINAL_START`` (default 1). ``mm`` is
+    the 1-based ordinal of the file within that folder (inventory order).
+    No-op when ``TITLE_PREFIX`` is empty.
+    """
+    token = title_prefix_token()
+    if not token:
+        return {}
+
+    folder_start = title_ordinal_start()
+
+    folders: list[str] = []
+    by_folder: dict[str, list[str]] = {}
+    for rel in media_files:
+        folder = Path(rel).parent.as_posix()
+        if folder == ".":
+            folder = ""
+        if folder not in by_folder:
+            folders.append(folder)
+            by_folder[folder] = []
+        by_folder[folder].append(rel)
+
+    prefixes: dict[str, str] = {}
+    for offset, folder in enumerate(folders):
+        nn = folder_start + offset
+        for mm, rel in enumerate(by_folder[folder], start=1):
+            prefixes[rel] = f"{token} {nn:02d}.{mm:02d}"
+    return prefixes
+
+
 def clean_title_body(text: str) -> str:
     """Strip course prefix, Review marker, and trailing (duration) from a title body."""
     body = text.strip()
@@ -804,17 +1170,27 @@ def compose_media_title(
     lesson_title: str,
     ai_title: str | None,
     duration_seconds: int,
+    *,
+    numbered_prefix: str | None = None,
+    lessons_title_for_prefix: str | None = None,
 ) -> str:
     """Build ``[<TITLE_PREFIX> [nn.mm] ]<AI title> (duration)``.
 
-    When ``TITLE_PREFIX`` is set (e.g. ``DJ``), prefer a numbered prefix from
-    the lessons title (``DJ 01.01``), else the bare token. When ``TITLE_PREFIX``
-    is empty, omit any course prefix (CC4E style).
+    When ``TITLE_PREFIX`` is set (e.g. ``CA`` / ``DJ``), prefer a numbered
+    prefix already present on the lessons.json title
+    (``lessons_title_for_prefix``), else an ordinal ``TOKEN nn.mm`` from media
+    folder/file order (``TITLE_ORDINAL_START``), else the bare token. When
+    ``TITLE_PREFIX`` is empty, omit any course prefix (CC4E style).
+
+    ``lesson_title`` supplies the title body (may be an existing media.yaml
+    title or stem fallback); it is not used for numbered-prefix extraction so
+    a stale ``TOKEN nn.mm`` on an existing entry cannot override ordinals.
     """
     token = title_prefix_token()
-    prefix = extract_title_prefix(lesson_title) if token else None
+    prefix_source = lessons_title_for_prefix if lessons_title_for_prefix else ""
+    prefix = extract_title_prefix(prefix_source) if token else None
     if token and not prefix:
-        prefix = token
+        prefix = numbered_prefix or token
     body = clean_title_body(ai_title) if ai_title else ""
     if not body:
         body = clean_title_body(lesson_title)
@@ -852,9 +1228,10 @@ MEDIA_ARCHIVE_DIR = "archive"
 
 
 def scan_media_root(media_root: Path) -> list[str]:
-    """Return sorted relative paths of media files under media_root.
+    """Return sorted MEDIA_ROOT-relative ``folder/file`` media paths.
 
-    Skips the top-level ``archive/`` directory entirely.
+    Skips the top-level ``archive/`` directory entirely. These relative paths
+    are the canonical media.yaml entry keys.
     """
     if not media_root.is_dir():
         raise SystemExit(f"Error: media root is not a directory: {media_root}")
@@ -879,10 +1256,38 @@ def scan_media_root(media_root: Path) -> list[str]:
     return result
 
 
+def canonicalize_media_rel(rel: str, media_root: Path) -> str:
+    """Normalize a media path to the MEDIA_ROOT-relative ``folder/file`` key.
+
+    Keeps the path as-is when it already resolves under MEDIA_ROOT. If a longer
+    prefix was supplied (``ca4e-media/01-Origins/foo.m4v``) and ``folder/file``
+    exists, returns that. Never collapses to a bare filename when a folder is
+    present on disk.
+    """
+    rel_posix = Path(rel).as_posix().lstrip("./")
+    if (media_root / rel_posix).is_file():
+        return rel_posix
+    ff = folder_file_key(rel_posix)
+    if ff != rel_posix and (media_root / ff).is_file():
+        return ff
+    return rel_posix
+
+
 def resolve_media_files(media_root: Path, files_path: Path | None) -> list[str]:
     if files_path is not None:
-        return load_media_files(files_path)
-    return scan_media_root(media_root)
+        raw = load_media_files(files_path)
+    else:
+        raw = scan_media_root(media_root)
+    # Preserve scan order; canonicalize and dedupe.
+    seen: set[str] = set()
+    result: list[str] = []
+    for name in raw:
+        key = canonicalize_media_rel(name, media_root)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+    return result
 
 def title_from_stem(rel_path: str) -> str:
     stem = Path(rel_path).stem
@@ -896,15 +1301,20 @@ def resolve_title(
     *,
     force_title: bool,
     is_new: bool,
+    folder_file_index: dict[str, str] | None = None,
 ) -> str:
     """Return the title to store for this media file.
 
     Matched lessons titles are always applied (requirement: update title on rerun).
     Unmatched files warn and use a stem-derived title for new entries, or when
     ``--force-title`` is set; otherwise an existing title is preserved.
+
+    Matching accepts an exact media path or a unique ``folder/file`` when
+    lessons.json stores a longer prefixed path.
     """
-    if rel_path in title_map:
-        return title_map[rel_path]
+    lesson_title = lookup_lessons_media(rel_path, title_map, folder_file_index)
+    if isinstance(lesson_title, str) and lesson_title.strip():
+        return lesson_title
 
     if existing_title and not force_title and not is_new:
         warnings.warn(
@@ -1103,6 +1513,7 @@ def ordered_entry(
     container_creation: Any = None,
     qt_creation: Any = None,
     youtube_id: Any = None,
+    kaltura_id: Any = None,
     description: Any = None,
     tags: Any = None,
     force_youtube: bool = False,
@@ -1112,8 +1523,8 @@ def ordered_entry(
 ) -> CommentedMap:
     """Update an entry in place so ruamel comments/formatting are preserved.
 
-    ``youtube_id`` is expected to already be resolved by the caller
-    (playlist, then lessons.json, then existing).
+    ``youtube_id`` and ``kaltura_id`` are expected to already be resolved by the
+    caller (playlist / lessons.json / existing).
 
     ``title`` is the course-facing title (typically from lessons.json).
     ``ai_title`` records the AI-generated title for later comparison; it is
@@ -1121,6 +1532,7 @@ def ordered_entry(
     """
     preserved = {key: existing.get(key, None) for key in PRESERVE_KEYS}
     preserved["youtube_id"] = youtube_id
+    preserved["kaltura_id"] = kaltura_id
     preserved["ai_title"] = choose_field(
         preserved["ai_title"], ai_title, force=force_ai_title
     )
@@ -1131,8 +1543,6 @@ def ordered_entry(
             force=force_description or force_youtube,
         )
     )
-    # Always preserve manually set kaltura_id.
-    preserved["kaltura_id"] = existing.get("kaltura_id", None)
 
     existing_tags = normalize_tags(existing.get("tags"))
     incoming_tags = normalize_tags(tags)
@@ -1225,12 +1635,23 @@ def main(argv: list[str] | None = None) -> int:
 
     media_files = resolve_media_files(media_root, args.files)
     inventory_label = str(args.files) if args.files else str(media_root)
-    title_map, lesson_youtube_map, _, _ = load_lessons_media_map(
-        args.lessons, relevant=set(media_files)
-    )
+    (
+        title_map,
+        lesson_youtube_map,
+        lesson_kaltura_map,
+        _,
+        _,
+        _,
+    ) = load_lessons_media_map(args.lessons, relevant=set(media_files))
+    title_folder_file_index = build_lessons_folder_file_index(title_map)
+    youtube_folder_file_index = build_lessons_folder_file_index(lesson_youtube_map)
+    kaltura_folder_file_index = build_lessons_folder_file_index(lesson_kaltura_map)
 
     playlist = load_youtube_playlist(args.youtube_playlist)
     by_id, by_title, by_basename = index_youtube_playlist(playlist)
+    kaltura_playlist = load_kaltura_playlist(args.kaltura_playlist)
+    kaltura_by_id, kaltura_by_name = index_kaltura_playlist(kaltura_playlist)
+    ordinal_prefixes = build_media_ordinal_prefixes(media_files)
     whisper_root = resolve_whisper_root(args)
 
     yaml = build_yaml()
@@ -1242,12 +1663,18 @@ def main(argv: list[str] | None = None) -> int:
     youtube_matched = 0
     youtube_from_lessons: list[str] = []
     youtube_unmatched: list[str] = []
+    kaltura_from_playlist: list[str] = []
+    kaltura_from_lessons: list[str] = []
+    kaltura_kept: list[str] = []
+    kaltura_unmatched: list[str] = []
     ai_desc_count = 0
     yt_desc_count = 0
     ai_tags_count = 0
     ai_title_count = 0
 
     for rel_name in media_files:
+        # Inventory keys are MEDIA_ROOT-relative (folder/file). Do not key by a
+        # bare filename or by a longer lessons.json prefix.
         media_path = media_root / rel_name
         if not media_path.is_file():
             raise SystemExit(f"Error: missing media file: {media_path}")
@@ -1264,13 +1691,25 @@ def main(argv: list[str] | None = None) -> int:
             existing_title,
             force_title=args.force_title,
             is_new=is_new,
+            folder_file_index=title_folder_file_index,
         )
 
-        lesson_title_for_yt = title_map.get(rel_name) or lesson_title
+        lesson_title_for_yt = (
+            lookup_lessons_media(rel_name, title_map, title_folder_file_index)
+            or lesson_title
+        )
+        lessons_title_for_prefix = lookup_lessons_media(
+            rel_name, title_map, title_folder_file_index
+        )
+        if not isinstance(lessons_title_for_prefix, str):
+            lessons_title_for_prefix = None
+        lesson_youtube_id = lookup_lessons_media(
+            rel_name, lesson_youtube_map, youtube_folder_file_index
+        )
         youtube_id, yt_entry = resolve_youtube_id(
             rel_name,
             existing_youtube_id=existing.get("youtube_id"),
-            lesson_youtube_id=lesson_youtube_map.get(rel_name),
+            lesson_youtube_id=lesson_youtube_id,
             lesson_title=lesson_title_for_yt,
             by_id=by_id,
             by_title=by_title,
@@ -1294,6 +1733,30 @@ def main(argv: list[str] | None = None) -> int:
                 UserWarning,
                 stacklevel=2,
             )
+
+        lesson_kaltura_id = lookup_lessons_media(
+            rel_name, lesson_kaltura_map, kaltura_folder_file_index
+        )
+        existing_kaltura = normalize_kaltura_id(existing.get("kaltura_id"))
+        kaltura_id, kaltura_entry = resolve_kaltura_id(
+            rel_name,
+            existing_kaltura_id=existing_kaltura,
+            lesson_kaltura_id=lesson_kaltura_id,
+            lesson_title=lesson_title_for_yt,
+            by_id=kaltura_by_id,
+            by_name=kaltura_by_name,
+            force=args.force_kaltura,
+        )
+        if kaltura_id and existing_kaltura and kaltura_id == existing_kaltura and not args.force_kaltura:
+            kaltura_kept.append(rel_name)
+        elif kaltura_entry is not None and (
+            not existing_kaltura or args.force_kaltura
+        ):
+            kaltura_from_playlist.append(rel_name)
+        elif kaltura_id and not existing_kaltura:
+            kaltura_from_lessons.append(rel_name)
+        elif kaltura_playlist and not kaltura_id:
+            kaltura_unmatched.append(rel_name)
 
         ai_title, ai_tags, ai_description = load_ai_metadata(whisper_root, rel_name)
         if ai_title:
@@ -1336,13 +1799,26 @@ def main(argv: list[str] | None = None) -> int:
 
         meta = probe_media_meta(ffprobe, media_path)
         duration = meta["duration"]
+        numbered_prefix = ordinal_prefixes.get(rel_name)
         # Course-facing title comes from lessons.json (plus optional TITLE_PREFIX).
-        title = compose_media_title(lesson_title, None, duration)
+        title = compose_media_title(
+            lesson_title,
+            None,
+            duration,
+            numbered_prefix=numbered_prefix,
+            lessons_title_for_prefix=lessons_title_for_prefix,
+        )
         # Keep AI wording separately for later comparison / editing.
         composed_ai_title = None
         force_ai_title = False
         if ai_title:
-            composed_ai_title = compose_media_title(lesson_title, ai_title, duration)
+            composed_ai_title = compose_media_title(
+                lesson_title,
+                ai_title,
+                duration,
+                numbered_prefix=numbered_prefix,
+                lessons_title_for_prefix=lessons_title_for_prefix,
+            )
             force_ai_title = True
 
         updated[rel_name] = ordered_entry(
@@ -1355,6 +1831,7 @@ def main(argv: list[str] | None = None) -> int:
             container_creation=meta.get("container_creation"),
             qt_creation=meta.get("qt_creation"),
             youtube_id=youtube_id,
+            kaltura_id=kaltura_id,
             description=description,
             tags=tags,
             force_youtube=args.force_youtube,
@@ -1408,6 +1885,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Unmatched media files ({len(youtube_unmatched)}):")
             for name in youtube_unmatched:
                 print(f"  {name}")
+    if kaltura_playlist or kaltura_from_playlist or kaltura_from_lessons or kaltura_unmatched:
+        print(
+            f"Kaltura ids: {len(kaltura_from_playlist)} filled from playlist"
+            + (f" ({args.kaltura_playlist})" if kaltura_playlist else "")
+            + f", {len(kaltura_from_lessons)} from lessons.json only"
+            + f", {len(kaltura_kept)} kept existing"
+            + f", {len(kaltura_unmatched)} unmatched"
+        )
+        if kaltura_unmatched:
+            print(f"Unmatched Kaltura media files ({len(kaltura_unmatched)}):")
+            for name in kaltura_unmatched:
+                print(f"  {name}")
+    elif args.kaltura_playlist and not args.kaltura_playlist.exists():
+        print(
+            f"Kaltura ids: no playlist dump at {args.kaltura_playlist} "
+            "(run dump-kaltura-playlist.py)"
+        )
     if orphans:
         print(f"Orphaned YAML entries ({len(orphans)}) not in {inventory_label}:")
         for name in orphans:

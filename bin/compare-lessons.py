@@ -41,9 +41,14 @@ def main() -> int:
     entries = data["entries"]
     yaml_files = set(entries.keys())
 
-    title_map, youtube_map, title_conflicts, youtube_conflicts = (
-        bootstrap.load_lessons_media_map(lessons_path, strict=False)
-    )
+    (
+        title_map,
+        youtube_map,
+        _kaltura_map,
+        title_conflicts,
+        youtube_conflicts,
+        _kaltura_conflicts,
+    ) = bootstrap.load_lessons_media_map(lessons_path, strict=False)
     lesson_files = set(title_map.keys())
 
     print(f"lessons.json: {lessons_path} ({len(lesson_files)} media refs)")

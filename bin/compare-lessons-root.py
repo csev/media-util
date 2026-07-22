@@ -41,16 +41,32 @@ def main() -> int:
     lessons_path = args.lessons or common.default_lessons()
 
     root_files = set(bootstrap.scan_media_root(media_root))
-    title_map, youtube_map, title_conflicts, youtube_conflicts = (
-        bootstrap.load_lessons_media_map(lessons_path, strict=False)
-    )
+    (
+        title_map,
+        youtube_map,
+        _kaltura_map,
+        title_conflicts,
+        youtube_conflicts,
+        _kaltura_conflicts,
+    ) = bootstrap.load_lessons_media_map(lessons_path, strict=False)
     lesson_files = set(title_map.keys())
+    title_folder_file_index = bootstrap.build_lessons_folder_file_index(title_map)
+
+    # Pair MEDIA_ROOT folder/file paths to lessons.json media keys (exact or
+    # unique folder/file — lessons may use a longer prefix like ca4e-media/...).
+    root_to_lesson: dict[str, str] = {}
+    for rel in root_files:
+        key = bootstrap.match_lessons_media_key(rel, title_map, title_folder_file_index)
+        if key is not None:
+            root_to_lesson[rel] = key
+    matched_lesson_keys = set(root_to_lesson.values())
+    matched_root = set(root_to_lesson.keys())
 
     print(f"lessons.json: {lessons_path} ({len(lesson_files)} media refs)")
     print(f"MEDIA_ROOT:   {media_root} ({len(root_files)} media files)")
 
-    only_lessons = sorted(lesson_files - root_files)
-    only_root = sorted(root_files - lesson_files)
+    only_lessons = sorted(lesson_files - matched_lesson_keys)
+    only_root = sorted(root_files - matched_root)
 
     conflict_title_lines: list[str] = []
     for media, titles in sorted(title_conflicts.items()):
@@ -66,7 +82,9 @@ def main() -> int:
 
     # Lessons that point at a path present on disk, but with no youtube id.
     missing_youtube = sorted(
-        rel for rel in (lesson_files & root_files) if rel not in youtube_map
+        root_to_lesson[rel]
+        for rel in sorted(matched_root)
+        if root_to_lesson[rel] not in youtube_map
     )
 
     problems = 0
@@ -88,7 +106,7 @@ def main() -> int:
         "In both, but lessons.json has no youtube id", missing_youtube
     )
 
-    print(f"\nIn both: {len(lesson_files & root_files)}")
+    print(f"\nIn both: {len(matched_root)} (exact or unique folder/file)")
     print(f"lessons.json youtube ids: {len(youtube_map)}")
 
     return common.summary_and_exit(problems)

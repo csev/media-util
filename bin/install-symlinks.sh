@@ -39,6 +39,7 @@ link_one whisper-lessons
 link_one whisper-one.sh
 link_one bootstrap-media-yaml.py
 link_one dump-youtube-playlist.sh
+link_one dump-kaltura-playlist.py
 link_one update-lessons-from-media-yaml.py
 link_one update-youtube-from-media-yaml.py
 link_one update-media-meta-from-fs.py

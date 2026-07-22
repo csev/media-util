@@ -82,7 +82,7 @@ def main() -> int:
         raise SystemExit(f"Error: empty or missing playlist: {playlist_path}")
 
     by_id, by_title, by_basename = bootstrap.index_youtube_playlist(playlist)
-    title_map, lesson_youtube_map, _, _ = bootstrap.load_lessons_media_map(
+    title_map, lesson_youtube_map, _, _, _, _ = bootstrap.load_lessons_media_map(
         lessons_path, relevant=set(entries.keys())
     )
 

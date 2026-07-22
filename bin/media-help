@@ -15,6 +15,7 @@ Always start with (example: DJ4E):
 Build / refresh
 ---------------
   dump-youtube-playlist.sh              Dump YouTube playlist → youtube-playlist.jsonl
+  dump-kaltura-playlist.py              Dump Kaltura playlist → kaltura-playlist.jsonl
   compare-lessons-youtube.py            Diff lessons.json ↔ playlist JSONL
   compare-lessons-root.py               Diff lessons.json ↔ MEDIA_ROOT
   whisper-lessons                       Transcribe media listed in lessons.json
@@ -38,22 +39,28 @@ After media.yaml is the source of truth — push to YouTube
   update-youtube-from-media-yaml.py --apply --force-tags
                                         # retry tags when API list returns none
 
-Kaltura (needs admin secret in media.env / ~/.ssh/kaltura_admin_secret)
-------------------------------------------------------------------------
+Kaltura
+-------
+  dump-kaltura-playlist.py              Dump public playlist → kaltura-playlist.jsonl
+                                        (no admin secret; uses MediaSpace page)
+  compare-kaltura-to-media-yaml.py      Public playlist ↔ media.yaml (no API key)
+  kaltura-embed-urls                    Title + embed URL list from media.yaml
+  kaltura-embed-urls -o embeds.txt
+
+Kaltura upload / API (needs admin secret in media.env / ~/.ssh/kaltura_admin_secret)
+------------------------------------------------------------------------------------
   test-kaltura.py                       Smoke-test partner + admin secret
   upload-kaltura-from-media-yaml.py              Dry-run missing kaltura_id
   upload-kaltura-from-media-yaml.py --apply --limit 1
   upload-kaltura-from-media-yaml.py --apply --only lesson-01-welcome
   upload-kaltura-from-media-yaml.py --apply --adopt
                                         # record existing referenceId match
-  compare-kaltura-to-media-yaml.py      Scrape public playlist ↔ media.yaml (no API key)
   compare-kaltura.py                    Diff media.yaml ↔ Kaltura API (needs secret)
-  kaltura-embed-urls                    Title + embed URL list from media.yaml
-  kaltura-embed-urls -o embeds.txt
 
 Check for drift
 ---------------
-  dump-youtube-playlist.sh              Refresh playlist dump first
+  dump-youtube-playlist.sh              Refresh YouTube playlist dump first
+  dump-kaltura-playlist.py              Refresh Kaltura playlist dump first
   compare-lessons.py                    Diff lessons.json ↔ media.yaml
   compare-media-root.py                 Diff MEDIA_ROOT ↔ media.yaml
   compare-youtube.py                    Diff media.yaml ↔ playlist

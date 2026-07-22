@@ -24,6 +24,7 @@ cd /Users/csev/htdocs/dj4e
 | I want to… | Command |
 |---|---|
 | Dump YouTube playlist | `dump-youtube-playlist.sh` |
+| Dump Kaltura playlist | `dump-kaltura-playlist.py` |
 | Diff lessons ↔ playlist JSONL | `compare-lessons-youtube.py` |
 | Diff lessons ↔ MEDIA_ROOT | `compare-lessons-root.py` |
 | Generate vocabulary file | `tar cfv lectures.tar lectures` then use ChatGPT |
@@ -112,6 +113,16 @@ dump-youtube-playlist.sh
 Writes `$YOUTUBE_DIR/youtube-playlist.jsonl` (ids, titles, descriptions, durations).
 Members-only / blocked playlist items may make `yt-dlp` exit non-zero; the dump
 script still keeps whatever entries it could fetch.
+
+### 1b. Download the existing Kaltura / MediaSpace playlist
+
+```bash
+dump-kaltura-playlist.py
+```
+
+Writes `$KALTURA_DIR/kaltura-playlist.jsonl` (or `$COURSE_ROOT/kaltura/…`)
+using the public MediaSpace page — no admin secret required. Needs
+`KALTURA_PLAYLIST_URL` / `KALTURA_PLAYLIST_ID` in `media.env`.
 
 ### 2. Align `lessons.json` and `MEDIA_ROOT`
 
@@ -314,6 +325,8 @@ course-www/
   youtube/
     youtube-playlist.jsonl   # from dump-youtube-playlist.sh
     youtube-oauth-token.json # after first OAuth consent (gitignored)
+  kaltura/
+    kaltura-playlist.jsonl   # from dump-kaltura-playlist.py
   whisper/
     *whisper-vocabulary*     # optional, searched upward
     *whisper-replacements*   # optional cleanup rules (`incorrect => correct`)
@@ -340,7 +353,8 @@ Media binaries usually live outside the www tree, for example:
 | Command | Purpose |
 |---|---|
 | `media-help` | Dump common commands cheat sheet |
-| `dump-youtube-playlist.sh` | Dump playlist metadata to JSONL |
+| `dump-youtube-playlist.sh` | Dump YouTube playlist metadata to JSONL |
+| `dump-kaltura-playlist.py` | Dump public Kaltura/MediaSpace playlist to JSONL (no admin secret) |
 | `test-youtube-oauth.py` | Smoke-test OAuth client + YouTube API access |
 | `update-youtube-from-media-yaml.py` | Push `media.yaml` titles, descriptions, and tags to YouTube |
 | `update-lessons-from-media-yaml.py` | Copy `media.yaml` titles + `kaltura_id` into `lessons.json` (Review stays in lessons) |
@@ -380,10 +394,14 @@ Media binaries usually live outside the www tree, for example:
 | `KALTURA_ADMIN_SECRET` | Kaltura tools | Admin API secret (or secret file) |
 | `KALTURA_SECRET_FILE` | Kaltura tools | Default `~/.ssh/kaltura_admin_secret` |
 | `KALTURA_CATEGORY_ID` | upload / compare | Optional category to attach / scan |
-| `KALTURA_PLAYLIST_ID` | upload | Optional static playlist to append |
+| `KALTURA_PLAYLIST_ID` | dump / upload / compare | Static playlist id |
+| `KALTURA_PLAYLIST_URL` | dump / compare | Public MediaSpace playlist URL |
+| `KALTURA_DIR` | `dump-kaltura-playlist.py` | Course `kaltura/` folder for JSONL dump |
+| `KALTURA_PLAYLIST_JSONL` | dump | Optional override for the JSONL path |
 | `KALTURA_USER_ID` | Kaltura session | Session user (default `media-util`) |
 | `COURSE_HINT` | `whisper-media.sh`, `whisper-folder.sh` | Prompt context for Whisper |
 | `TITLE_PREFIX` | bootstrap | Course title token (`DJ`, …); empty = no prefix (CC4E) |
+| `TITLE_ORDINAL_START` | bootstrap | First folder `nn` in `TOKEN nn.mm` (default `1`; use `0` for `00.mm`) |
 | `EXTRA_TAGS` | bootstrap | Appended to each entry's tags; also stored as `extra_tags` |
 | `EXTRA_DESCRIPTION` | bootstrap | Appended to each entry's description; also `extra_description` |
 | `MODEL` / `WHISPER_MODEL` | whisper scripts | ggml model path |

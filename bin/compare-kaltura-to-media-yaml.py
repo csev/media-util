@@ -2,16 +2,12 @@
 """Compare a public Kaltura/MediaSpace playlist to media.yaml (no admin secret).
 
 Flow:
-  1. Fetch the public playlist HTML ($KALTURA_PLAYLIST_URL)
-  2. Pull a guest KS embedded in the page (when present)
-  3. Call playlist.execute for ordered entries (id, name)
-  4. Fall back to scraping playlistContent ids if execute is unavailable
-
-Compares against media.yaml:
-  - kaltura_id membership
-  - title (media.yaml title vs Kaltura name)
-  - duration (seconds; ±2s tolerance)
-  - order of shared ids (media.yaml entry order vs playlist order)
+  1. Fetch the public playlist (see dump-kaltura-playlist.py / kaltura_common)
+  2. Compare against media.yaml:
+     - kaltura_id membership
+     - title (media.yaml title vs Kaltura name)
+     - duration (seconds; ±2s tolerance)
+     - order of shared ids (media.yaml entry order vs playlist order)
 
 Example:
   source media.env
@@ -22,206 +18,17 @@ Example:
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compare_common as common  # noqa: E402
+import kaltura_common as kc  # noqa: E402
 
-USER_AGENT = "media-util-compare-kaltura-to-media-yaml/1.0"
-KALTURA_API = "https://www.kaltura.com/api_v3/index.php"
-PLAYLIST_CONTENT_RE = re.compile(
-    r'playlistContent["\']?\s*[:=]\s*["\']([^"\']+)["\']'
-)
-KS_RE = re.compile(r'"ks"\s*:\s*"([^"]+)"')
-ENTRY_ID_RE = re.compile(r"^1_[a-zA-Z0-9]+$")
-TITLE_RE = re.compile(r"<title>([^<]+)</title>", re.IGNORECASE)
-PLAYLIST_ID_FROM_URL_RE = re.compile(r"/(1_[a-zA-Z0-9]+)(?:/(1_[a-zA-Z0-9]+))?/?$")
 # media.yaml duration is integer seconds from ffprobe; Kaltura duration is seconds.
 DURATION_TOLERANCE_SEC = 2
-
-
-def fail(message: str, code: int = 1) -> None:
-    print(f"ERROR: {message}", file=sys.stderr)
-    raise SystemExit(code)
-
-
-def default_playlist_url() -> str:
-    for name in ("KALTURA_PLAYLIST_URL", "KALTURA_TAB"):
-        value = os.environ.get(name)
-        if value and value.strip():
-            return value.strip()
-    fail(
-        "set KALTURA_PLAYLIST_URL in media.env (or pass --url). "
-        "Example: https://umsiali.mivideo.it.umich.edu/playlist/dedicated/410698932/1_6058dcqq"
-    )
-
-
-def default_playlist_id() -> str | None:
-    value = os.environ.get("KALTURA_PLAYLIST_ID")
-    if value and value.strip():
-        return value.strip()
-    return None
-
-
-def normalize_playlist_url(url: str) -> str:
-    """Strip a trailing /{entry_id} if present so we fetch the playlist root."""
-    url = url.strip().rstrip("/")
-    url = url.replace("/{id}", "").rstrip("/")
-    parts = url.split("/")
-    if parts and ENTRY_ID_RE.match(parts[-1] or ""):
-        if len(parts) >= 2 and ENTRY_ID_RE.match(parts[-2] or ""):
-            url = "/".join(parts[:-1])
-    return url
-
-
-def playlist_id_from_url(url: str) -> str | None:
-    """Best-effort playlist id from .../dedicated/<n>/<playlistId>[/<entryId>]."""
-    m = PLAYLIST_ID_FROM_URL_RE.search(url.rstrip("/"))
-    if not m:
-        return None
-    # If two trailing entry-shaped ids, first is playlist, second is entry.
-    if m.group(2):
-        return m.group(1)
-    return m.group(1)
-
-
-def fetch_html(url: str) -> str:
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            charset = resp.headers.get_content_charset() or "utf-8"
-            return resp.read().decode(charset, errors="replace")
-    except urllib.error.HTTPError as exc:
-        fail(f"HTTP {exc.code} fetching {url}")
-    except urllib.error.URLError as exc:
-        fail(f"failed to fetch {url}: {exc.reason}")
-
-
-def scrape_page_title(html: str) -> str | None:
-    tm = TITLE_RE.search(html)
-    if not tm:
-        return None
-    return re.sub(r"\s+", " ", tm.group(1)).strip() or None
-
-
-def scrape_guest_ks(html: str) -> str | None:
-    matches = KS_RE.findall(html)
-    return matches[0] if matches else None
-
-
-def scrape_playlist_content_ids(html: str) -> list[str]:
-    match = PLAYLIST_CONTENT_RE.search(html)
-    if not match:
-        return []
-    ids: list[str] = []
-    seen: set[str] = set()
-    for part in match.group(1).split(","):
-        eid = part.strip()
-        if not eid or not ENTRY_ID_RE.match(eid) or eid in seen:
-            continue
-        seen.add(eid)
-        ids.append(eid)
-    return ids
-
-
-def kaltura_api(ks: str, service: str, action: str, **params: Any) -> Any:
-    data: dict[str, Any] = {
-        "format": "1",
-        "service": service,
-        "action": action,
-        "ks": ks,
-    }
-    data.update(params)
-    body = urllib.parse.urlencode(data).encode("utf-8")
-    req = urllib.request.Request(
-        KALTURA_API,
-        data=body,
-        method="POST",
-        headers={
-            "User-Agent": USER_AGENT,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def load_playlist_entries(
-    html: str, playlist_id: str
-) -> tuple[list[dict[str, Any]], str]:
-    """Return (entries, source_label).
-
-    Each entry: {id, name, duration} in playlist order.
-    """
-    ks = scrape_guest_ks(html)
-    if ks:
-        try:
-            result = kaltura_api(ks, "playlist", "execute", id=playlist_id)
-            if isinstance(result, dict) and result.get("code"):
-                print(
-                    f"WARNING: playlist.execute failed: {result.get('code')} "
-                    f"{result.get('message')}",
-                    file=sys.stderr,
-                )
-            elif isinstance(result, list) and result:
-                entries: list[dict[str, Any]] = []
-                for obj in result:
-                    if not isinstance(obj, dict):
-                        continue
-                    eid = obj.get("id")
-                    if not isinstance(eid, str) or not ENTRY_ID_RE.match(eid):
-                        continue
-                    name = obj.get("name")
-                    entries.append(
-                        {
-                            "id": eid,
-                            "name": name.strip()
-                            if isinstance(name, str) and name.strip()
-                            else None,
-                            "duration": parse_duration_seconds(obj.get("duration")),
-                        }
-                    )
-                if entries:
-                    return entries, "playlist.execute (guest KS from page)"
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
-            print(f"WARNING: playlist.execute error: {exc}", file=sys.stderr)
-
-    ids = scrape_playlist_content_ids(html)
-    if not ids:
-        fail(
-            "could not load playlist entries "
-            "(no guest KS execute result and no playlistContent in HTML)"
-        )
-    return (
-        [{"id": eid, "name": None, "duration": None} for eid in ids],
-        "playlistContent HTML scrape (ids only)",
-    )
-
-
-def parse_duration_seconds(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, float):
-        return int(round(value)) if value >= 0 else None
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(round(float(value.strip())))
-        except ValueError:
-            return None
-    return None
 
 
 def normalize_title(text: str) -> str:
@@ -247,7 +54,7 @@ def yaml_rows(entries: dict[str, Any]) -> list[dict[str, Any]]:
                 "title": title.strip()
                 if isinstance(title, str) and title.strip()
                 else None,
-                "duration": parse_duration_seconds(entry.get("duration")),
+                "duration": kc.parse_duration_seconds(entry.get("duration")),
             }
         )
     return rows
@@ -285,14 +92,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     media_yaml = args.media_yaml or common.default_media_yaml()
-    url = normalize_playlist_url(args.url or default_playlist_url())
-    playlist_id = (
-        args.playlist_id
-        or default_playlist_id()
-        or playlist_id_from_url(url)
-    )
-    if not playlist_id:
-        fail("could not determine playlist id (set KALTURA_PLAYLIST_ID or pass --playlist-id)")
 
     data = common.load_media_yaml(media_yaml)
     entries = data["entries"]
@@ -310,17 +109,21 @@ def main() -> int:
             empty_yaml.append(str(rel))
 
     print(f"media.yaml:   {media_yaml} ({len(entries)} entries, {len(yrows)} with kaltura_id)")
+    print("fetching…")
+    url, playlist_id, pl_entries, source, page_title = kc.fetch_public_playlist(
+        url=args.url,
+        playlist_id=args.playlist_id,
+    )
     print(f"playlist url: {url}")
     print(f"playlist id:  {playlist_id}")
-    print("fetching…")
-    html = fetch_html(url)
-    page_title = scrape_page_title(html)
     if page_title:
         print(f"page title:   {page_title}")
-
-    pl_entries, source = load_playlist_entries(html, playlist_id)
     print(f"source:       {source}")
     print(f"playlist:     {len(pl_entries)} entr(y/ies)")
+
+    # Adapt dump-shaped entries (title) to the prior name field used below.
+    for entry in pl_entries:
+        entry["name"] = entry.get("title")
 
     pl_ids = [e["id"] for e in pl_entries]
     pl_set = set(pl_ids)
